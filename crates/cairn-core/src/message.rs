@@ -69,6 +69,35 @@ pub struct Usage {
     pub estimated: bool,
 }
 
+impl Usage {
+    /// §4.8 / REQ-PROV-011 — a count Cairn produced itself. The flag is the
+    /// only thing that later distinguishes it from the provider's report, so
+    /// it must be set here rather than left to a default.
+    #[must_use]
+    pub const fn estimate(input: u32) -> Self {
+        Self {
+            input,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+            estimated: true,
+        }
+    }
+
+    /// §4.8 / REQ-PROV-011 — numbers the provider actually reported, which
+    /// override the estimate in cost accounting.
+    #[must_use]
+    pub const fn reported(input: u32, output: u32, cache_read: u32, cache_write: u32) -> Self {
+        Self {
+            input,
+            output,
+            cache_read,
+            cache_write,
+            estimated: false,
+        }
+    }
+}
+
 /// Why the model stopped (SPEC §4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]

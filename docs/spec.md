@@ -212,7 +212,7 @@ cairn [global flags] [subcommand]
 | D-02 | Concurrency model | **`tokio` multi-thread runtime + actor-style tasks communicating over typed `mpsc` channels; one `CancellationToken` tree** | Green threads à la Erlang; `async-std`; lock-heavy shared state | Structured cancellation maps directly to Ctrl+C semantics (§8.6). Actors avoid data races on session state. Rejected shared-mutable-state: hard to reason about in-flight turn reconstruction. |
 | D-03 | TUI framework | **`ratatui` 0.29 + `crossterm` 0.28** | `termwiz` (smaller community, fewer examples); `tui-rs` (dead); `bubbletea` (Go); raw ANSI by hand | Immediate-mode rendering → deterministic snapshot testing; crossterm handles Windows conhost + Unix, alternate screen, mouse capture, bracketed paste, SIGWINCH resize. Alternate screen entered at startup, restored on `Drop`/panic hook. |
 | D-04 | HTTP & streaming | **`reqwest` 0.12 (rustls, no default roots → bundled Mozilla roots) + hand-written SSE parser `cairn-sse` (internal crate)** | `eventsource-stream` (no idle timeout hooks); `hyper` raw (reimplements redirects/proxies); `ureq` (no streaming) | A bespoke 300-line SSE parser gives exact control over partial lines, CRLF, `id:`/`retry:` fields, idle timeout, and mid-stream cancel. reqwest provides proxy, HTTP/2, gzip, timeouts. |
-| D-05 | Retry & backoff | **Exponential backoff: base 500 ms, factor 2.0, max 30 s, full jitter, max 5 attempts for 429/5xx/network; 0 attempts for 4xx except 408/429** | Fixed interval; decorrelated jitter | Full jitter (`rand(0, min(cap, base*2^n))`) minimizes thundering herds across concurrent sessions. Retry matrix normative in §4.5. |
+| D-05 | Retry & backoff | **Exponential backoff: base 500 ms, factor 2.0, max 30 s, full jitter, max 5 retries for 429/5xx/network; 0 retries for 4xx except 408/429** | Fixed interval; decorrelated jitter | Full jitter (`rand(0, min(cap, base*2^n))`) minimizes thundering herds across concurrent sessions. Retry matrix normative in §4.5. |
 | D-06 | Parsing | **`tree-sitter` 0.24 with grammars compiled in-tree via `tree-sitter-*` crates, feature-gated** | `syn`/`rustc_ast` (single language); `uni-grammar`; regex | One query API for highlighting, symbol extraction, and post-edit syntax validation (§6.3.6). MVP grammars bundled; more via `cairn config set languages.<id>.grammar_path` (§6.7.4). |
 | D-07 | Search | **Embedded library: `grep-searcher` + `grep-regex` + `ignore` (the ripgrep crates)** | Subprocess `rg`; `grep` crate alone | Same semantics and ignore-rule engine as ripgrep without requiring an external binary; no shell-injection surface; walks with `WalkBuilder` honoring all ignore files. Rejected subprocess: breaks on machines without `rg` and adds PTY/exec complexity. Fallback: if embedded walk fails (e.g., ELOOP), return `E-GREP-WALK`. |
 | D-08 | Session storage | **JSONL, one file per session, append-only, with a versioned header record** | SQLite; single JSON blob | Append-only is crash-safe (partial last line is truncated on load); human-diffable; trivially exported; concurrent readers are safe. Rejected SQLite: a locked DB file corrupts the "resume after kill -9" story and complicates `export`. |
@@ -319,7 +319,7 @@ Crates in the workspace (paths in §15.1):
 | Crate | Responsibility | MAY import | MUST NOT import |
 |-------|----------------|-----------|-----------------|
 | `cairn-core` | Domain types: `Session`, `Message`, `Block`, `Event`, error codes, `TurnState` | std, serde, thiserror | any I/O crate, provider, tools, tui |
-| `cairn-sse` | SSE parsing over async bytes | tokio, bytes, thiserror | provider, tools |
+| `cairn-sse` | SSE parsing over async bytes | core, tokio, bytes, thiserror | provider, tools |
 | `cairn-provider` | `Provider` trait, adapters, retry, token accounting | core, sse, reqwest, registry | tools, tui, sessionstore |
 | `cairn-parse` | Tree-sitter wrapper, grammars, queries, syntax validation | tree-sitter, core | provider, tui |
 | `cairn-search` | File walking, ignore rules, grep, glob | ignore, grep-*, globset, core | provider, tui |
@@ -372,19 +372,26 @@ flowchart TD
     TURN --> SUB["subagent turn token (depth ≤ 2)"]
 ```
 
-- REQ-ARCH-007: Cancelling a parent MUST cancel all descendants within 10 ms; tool executors MUST poll `token.cancelled()` at least every 100 ms and additionally on SIGINT.
+- REQ-ARCH-007: Cancelling a parent MUST cancel all descendants within 10 ms; tool executors MUST poll `token.is_cancelled()` at least every 100 ms and additionally on SIGINT.
 - REQ-ARCH-008: Process exit MUST cancel the root token, wait up to 500 ms for flush of the session file, then `_exit` (no hangs). If flush fails, exit code `13`.
 
 ### 3.4 Core interfaces (normative Rust signatures)
 
 Crate placement follows §3.2: the `Provider` trait lives in `cairn-provider` and the `Tool`
 trait in `cairn-tools`, so `cairn-core` keeps the §3.2 dependency row `std, serde, thiserror`
-and cannot express `BoxStream` at all.
+and cannot express `BoxStream` at all. `CancellationToken` in every signature below is
+`cairn_core::cancel::CancellationToken` — the one D-02 tree (§3.1, §3.3), std-only precisely
+so that every crate can name it; no runtime crate's token may be introduced beside it. It is
+poll-based (`is_cancelled()`), which is why §4.3's stream re-checks it on a timer.
 
 A trait the runtime holds behind `dyn` — `Provider` (the registry keyed by `provider/…`) and
 `Tool` (the tool list) — returns `futures::future::BoxFuture` rather than `async fn`, because
 `async fn` in a trait is not object-safe: its return type names `Self`. Traits that are always
 held concretely may keep `async fn`.
+
+A method whose only borrowed input is `&self` elides that lifetime (`stream`, `execute` below):
+`'_` writes the same bound the named form would. `count_tokens` cannot, because the boxed future
+captures both `&self` and `req`, and only one explicit `'a` ties the two together.
 
 ```rust
 // cairn-provider/src/lib.rs
@@ -392,11 +399,11 @@ pub trait Provider: Send + Sync + 'static {
     fn id(&self) -> &ProviderId;                       // e.g. "anthropic"
     fn capabilities(&self) -> Capabilities;
     /// Streaming is the only supported mode; non-streaming adapters buffer internally.
-    fn stream<'a>(
-        &'a self,
+    fn stream(
+        &self,
         req: ModelRequest,
         cancel: CancellationToken,
-    ) -> BoxFuture<'a, Result<BoxStream<'static, StreamEvent>, ProviderError>>;
+    ) -> BoxFuture<'_, Result<BoxStream<'static, StreamEvent>, ProviderError>>;
     fn count_tokens<'a>(
         &'a self,
         req: &'a ModelRequest,
@@ -443,12 +450,12 @@ pub trait Tool: Send + Sync + 'static {
     fn timeout(&self) -> Duration;
     fn max_output_bytes(&self) -> u32;
     fn requires_serial(&self) -> bool;
-    fn execute<'a>(
-        &'a self,
+    fn execute(
+        &self,
         input: serde_json::Value,
         ctx: ToolContext,
         cancel: CancellationToken,
-    ) -> BoxFuture<'a, Result<ToolOutput, ToolError>>;
+    ) -> BoxFuture<'_, Result<ToolOutput, ToolError>>;
 }
 
 pub struct ToolContext {
@@ -648,11 +655,12 @@ Serialization to storage uses snake_case JSON; adapters map to wire formats.
 ### 4.3 Streaming: SSE contract
 
 **Parser rules (`cairn-sse`):**
-1. Split on `\n\n` (also accept `\r\n\r\n`); a line is `field[: value]`; comment lines start with `:`; multiple `data:` lines join with `\n`.
+1. Split on `\n\n`, and on any other adjacent pair of line endings where a line ending is `\n` with an optional preceding `\r` — so `\r\n\r\n`, `\n\r\n` and `\r\n\n` delimit too; a line is `field[: value]`; comment lines start with `:`; multiple `data:` lines join with `\n`. A lone `\r` is data, not a terminator.
 2. Only `event` and `data` fields are consumed; `id` and `retry` are recorded but unused in v1 (no auto-reconnect replay — see §4.7).
 3. `data: [DONE]` terminates for OpenAI-family; Anthropic terminates on `event: message_stop`.
 4. Buffer cap: a single SSE event exceeding **1 MiB** → `E-PROV-EVENTBIG`, stream aborted, no retry (malformed server).
-5. Partial line at buffer end MUST be retained across reads; the parser MUST NOT assume read boundaries align with events.
+5. Partial line at buffer end MUST be retained across reads; the parser MUST NOT assume read boundaries align with events. Decoding therefore happens over a whole event, never over a whole read, so a multi-byte UTF-8 sequence split across two reads is never mistaken for invalid bytes.
+6. At end of stream the parser MUST still dispatch a pending event carrying at least one `data:` line or an `event:` name, and MUST emit an unterminated final line as it stands. A server that omits the final blank line would otherwise lose `[DONE]` or `message_stop`; the WHATWG algorithm discards both, §4.3 deliberately does not.
 
 **Partial JSON tool-argument assembly:**
 - Arguments accumulate into a per-`index` buffer; Cairn does **not** parse incrementally for execution. On `ToolCallEnd`, run `serde_json::from_str`.
@@ -662,13 +670,13 @@ Serialization to storage uses snake_case JSON; adapters map to wire formats.
 **Malformed-chunk recovery:**
 | Condition | Action |
 |-----------|--------|
-| Non-UTF8 bytes | lossy replace with U+FFFD, log `warn`, continue |
+| Non-UTF8 bytes | lossy replace with U+FFFD, log `warn`, continue (`cairn-sse` carries no logger: it counts the substitutions, `cairn-provider` emits the `warn`) |
 | Line not `field: value` | ignore line |
 | Unknown `event:` name | ignore event, keep stream |
 | JSON parse failure of `data` (non-tool) | drop event, count `malformed_events`; if ≥ 5 in one stream → `E-PROV-MALFORMED` abort |
 | Heartbeat comment `: ping` | reset idle timer |
 
-**Idle timeout:** no bytes for **45 s** (`providers.<id>.idle_timeout_ms = 45000`) → abort with `E-PROV-IDLE`, retryable (attempt counts toward §4.5).
+**Idle timeout:** no bytes for **45 s** (`providers.<id>.idle_timeout_ms = 45000`) → abort with `E-PROV-IDLE`, retryable (it counts toward §4.5's retry budget).
 
 **Cancellation:** dropping the stream or `token.cancel()` MUST abort the HTTP body within 250 ms (`reqwest::Response` dropped), and MUST send `POST /v1/messages/.../cancel` only if the provider documents it (none in MVP).
 
@@ -685,7 +693,7 @@ Serialization to storage uses snake_case JSON; adapters map to wire formats.
 
 ### 4.5 Error taxonomy and retry matrix
 
-| HTTP / condition | Error code | Retryable | Attempts | Backoff | Notes |
+| HTTP / condition | Error code | Retryable | Retries | Backoff | Notes |
 |------------------|-----------|-----------|----------|---------|-------|
 | 401 | `E-PROV-AUTH` | no | 0 | — | Message: `Provider <id>: invalid API key. Run 'cairn auth login <id>'.` |
 | 403 | `E-PROV-FORBID` | no | 0 | — | Model not entitled; suggest alternate model in hint. |
@@ -700,9 +708,13 @@ Serialization to storage uses snake_case JSON; adapters map to wire formats.
 | 500/502/503/504/529 | `E-PROV-SERVER` | yes | 5 | exponential + full jitter | |
 | TLS failure | `E-PROV-TLS` | no | 0 | — | Hint: corporate proxy → `providers.<id>.ca_bundle`. |
 | DNS / connect refused | `E-PROV-NET` | yes | 5 | exponential + full jitter | |
+| Connection lost mid-stream (byte source failed) | `E-PROV-NET` | yes | 5 | exponential + full jitter | §4.7: the whole call is retried from the original request and partial content is discarded (REQ-PROV-009) — never resumed |
 | Idle timeout mid-stream | `E-PROV-IDLE` | yes | 5 | exponential | No partial content replay (§4.7). |
 | Malformed SSE (≥5 events) | `E-PROV-MALFORMED` | yes | 1 | 1 s fixed | After 1 retry → fatal. |
 | 1xx / invalid status line | `E-PROV-PROTO` | no | 0 | — | |
+| SSE event over the 1 MiB cap (§4.3 rule 4) | `E-PROV-EVENTBIG` | no | 0 | — | Malformed server, not a transient fault: the stream is abandoned where it was noticed and the turn ends as a provider failure |
+| prompt fallback disabled after 2 malformed `<tool>` blocks (REQ-PROV-008) | `E-PROV-FALLBACK` | no | 0 | — | Not an HTTP condition: `Event::Error` is emitted, prompt-fallback stays off for the session, and the turn continues |
+| `--offline` / `network.offline` (§11.1) | `E-PROV-OFFLINE` | no | 0 | — | Fails before a socket is opened — deliberately faster than any connection attempt; exit 3 |
 
 **Backoff formula:** `delay_n = rand_uniform(0, min(30000, 500 * 2^(n-1)))` ms for n = 1..5, except `E-PROV-RATELIMIT` which uses `max(delay_n, retry_after_ms)` capped at 120000 ms.
 - REQ-PROV-005: Total time budget for one model call including retries MUST NOT exceed **180 s** (`providers.max_total_ms = 180000`).
@@ -2550,7 +2562,7 @@ Wireframes:
 **Error state**
 ```
 │ ✗ Provider error  E-PROV-RATELIMIT (HTTP 429)                        │
-│   OpenAI rate limit reached; retrying in 12s (attempt 2/5).         │
+│   OpenAI rate limit reached; retrying in 12s (retry 1/5).           │
 │   ┌ detail ────────────────────────────────────────────────────┐    │
 │   │ {"error":{"type":"rate_limit_exceeded", ...}}              │    │
 │   └────────────────────────────────────────────────────────────┘    │
@@ -2718,7 +2730,7 @@ Referenced by §7.4; rendered by `PlanCard` widget with the wireframe in §10.1;
 | Cold start loading | `Loading repository map… 1,842 files (1.2s)` → when done `repo map ready in 1.4s (warm: 40 ms)`; on slow start > 2 s: `Still indexing… you can start typing; results will use partial data.` |
 | Empty session | `Ready. Type a prompt, @ to mention a file, / for commands.` + second line `AGENTS.md: none found · run /init to create one.` (if missing) |
 | Empty search | `No matches for '<pattern>' in 1,842 files (62 ms). Try /add <glob> or check .cairnignore.` |
-| Provider error | `✗ Provider error  E-PROV-RATELIMIT (HTTP 429)` / `  OpenAI rate limit reached; retrying in 12s (attempt 2/5).` |
+| Provider error | `✗ Provider error  E-PROV-RATELIMIT (HTTP 429)` / `  OpenAI rate limit reached; retrying in 12s (retry 1/5).` |
 | Auth error | `✗ E-PROV-AUTH (HTTP 401)` / `  Invalid API key for 'openai'. Run: cairn auth login openai` |
 | Permission denied | `✗ Permission denied  E-PERM-DENIED` / `  Rule r12 denies bash:rm in build mode. Use /permissions to add an allow rule.` |
 | Tool failure (model view mirrored) | `✗ edit_file failed  E-EDIT-NOMATCH` / `  Pattern not found in src/range.rs. recovery: re-read the file and retry.` |
@@ -3515,7 +3527,7 @@ Format: `ID | Preconditions | Steps | Expected`. All IDs are stable; a removed t
 | T-PROV-002 | stream truncates tool args at `{"path":"a.rs","old_` | complete stream | tool result stored with `max_output_bytes` cap; orphan check passes |
 | T-PROV-003 | providers a,b,c,d,e fixtures | call `capabilities()` | equals registry row; branching tests for prompt-fallback select by capability not name |
 | T-PROV-004 | model with `tool_calling:false` | complete turn | prompt-fallback format §4.6 used; `<tool>` extracted; result injected |
-| T-PROV-005 | server returns 429 with `Retry-After: 7` | one call | total wait ≥ 7 s, ≤ 7.5 s, 5 attempts then `E-PROV-RATELIMIT` |
+| T-PROV-005 | server returns 429 with `Retry-After: 7` | one call | every backoff is floored at the header's 7 s (the first draw is exactly 7 s); 5 retries then `E-PROV-RATELIMIT` |
 | T-PROV-006 | cancel mid-backoff and mid-stream | press cancel | HTTP aborted ≤ 250 ms; no retries after cancel (REQ-PROV-006) |
 | T-PROV-007 | provider errors after emitting a tool call | observe transcript | turn aborts with `Event::Error`, no fabricated tool result |
 | T-PROV-008 | fallback enabled, model emits 2 malformed `<tool>` blocks in a row + a 3rd | count | first 2 → `E-TOOL-BADJSON` repairs suggested; 3rd → fallback disabled, `E-PROV-FALLBACK` |
@@ -3547,13 +3559,13 @@ Format: `ID | Preconditions | Steps | Expected`. All IDs are stable; a removed t
 | **Retry-matrix rows — one test per §4.5 line (T-PROV-038..048)** | | | |
 | T-PROV-038 | 403 | call | `E-PROV-FORBID`, 0 retries, hint suggests an entitled model |
 | T-PROV-039 | 404 unknown model | call | `E-PROV-NOMODEL`, 0 retries, hint `cairn config set model …` |
-| T-PROV-040 | 408 then 200 | call | 5-attempt budget honored, backoff jitter within §4.5 formula |
+| T-PROV-040 | 408 then 200 | call | 5-retry budget honored, backoff jitter within §4.5 formula |
 | T-PROV-041 | 429 without `Retry-After` | call | standard backoff (no header wait), `E-PROV-RATELIMIT` after 5 |
 | T-PROV-042 | 413 payload too large | call | `E-PROV-PAYLOAD`, one compaction attempted, then fatal |
 | T-PROV-043 | 400 content filter | call | `E-PROV-FILTER`, 0 retries, exit 3, UI names the blocking content |
 | T-PROV-044 | 405 (other 4xx) | call | `E-PROV-REQ`, 0 retries |
 | T-PROV-045 | TLS handshake failure | call | `E-PROV-TLS`, 0 retries, `ca_bundle` hint |
-| T-PROV-046 | DNS failure / connection refused | call | `E-PROV-NET`, 5 attempts with jitter |
+| T-PROV-046 | DNS failure / connection refused | call | `E-PROV-NET`, 5 retries with jitter |
 | T-PROV-047 | invalid HTTP status line | call | `E-PROV-PROTO`, 0 retries |
 | T-PROV-048 | cancel during the backoff window | cancel | no further attempts (REQ-PROV-006); exit 7 |
 
@@ -4180,7 +4192,6 @@ cairn/
 | Crate | Version | Purpose / reason |
 |-------|---------|------------------|
 | `tokio` | 1.42 | async runtime (D-02); features: rt-multi-thread, macros, sync, time, process, signal, fs, io-util |
-| `tokio-util` | 0.7 | `CancellationToken` — the D-02 cancellation tree (§3.1), which `tokio` itself does not ship |
 | `ratatui` | 0.29 | TUI (D-03) |
 | `crossterm` | 0.28 | terminal backend: alt screen, mouse, paste, resize, Windows |
 | `reqwest` | 0.12 | HTTP (D-04); rustls, stream, gzip, http2; no openssl |
@@ -4255,7 +4266,7 @@ opt-level = 1          # keep tree-sitter/fast-path usable in debug
 | Milestone | Deliverables | Exit criteria (test IDs that MUST pass) |
 |-----------|--------------|----------------------------------------|
 | **M0 — Skeleton & contracts** (4 weeks) | Workspace + all crates stubbed; config loader + validation + JSON Schema; CLI skeleton with all subcommands/flags; event bus + schemas; error-code registry; CI (lint, unit, coverage) on 3 OS; ADRs for D-01..D-18 | T-CFG-001..006, T-CFG-010..030, T-CLI-001..003, T-CLI-020..023, T-ARCH-001..008, T-SCHEMA-001..003, T-TECH-001; coverage ≥ 70% on `cairn-config`/`cairn-core` |
-| **M1 — Provider + headless loop** (4 weeks) | 5 adapters, SSE parser, retry matrix, mock provider + cassettes, session JSONL store, `run -p` with text/json/stream-json, exit codes, logging + redaction | T-PROV-001..048, T-FAULT-001..006, T-SESS-010..031, T-CLI-010..017, T-SEC-001..003, T-ARCH-005..010; eval harness boots (3 smoke tasks) |
+| **M1 — Provider + headless loop** (4 weeks) | 5 adapters, SSE parser, retry matrix, mock provider + cassettes, session JSONL store, `run -p` with text/json/stream-json, exit codes, logging + redaction | T-PROV-001..014, T-PROV-020..048, T-FAULT-001..006, T-SESS-010..013, T-SESS-020..023, T-SESS-030..031, T-CLI-010..017, T-SEC-002, T-ARCH-005..008; eval harness boots (3 smoke tasks) |
 | **M2 — Tools & editing** (5 weeks) | 18 tools, validation pipeline, edit/fuzzy/syntax-rollback, bash PTY + background jobs, git tools, checkpoints, permission engine + defaults | T-TOOL-001..136, T-EDIT-001..025, T-GIT-001..009, T-PERM-001..040, T-CMD-001..104, T-CHK-001..022, T-SEC-011..019; mutation ≤ 5% on `cairn-perm` + edit |
 | **M3 — Context engine & TUI** (5 weeks) | discovery/ignore, tree-sitter index + PageRank/BM25, budgets + compaction, AGENTS.md, full TUI (wireframes, approvals, diff viewer, plan card), slash commands, keybindings | T-CTX-001..025, T-TUI-001..039, T-PROMPT-001..002, T-PERM-020, T-PERF-001..007; P-01..P-08 within tolerance |
 | **M4 — Modes, safety, autonomy** (4 weeks) | Plan artifact + handoff, auto guardrails + loop detection, mode switching, sandbox (Landlock/Seatbelt/restricted token), prompt-injection defenses, subagents, MCP, hooks | T-MODE-001..021, T-SBOX-001..013, T-SEC-020..030, T-LOOP-001..018, T-TOOL-015..017 + T-MCP-001..006; mutation ≤ 5% on sandbox; sec suite green in containers |
@@ -4354,10 +4365,18 @@ Every error code in §14.3.2b defines: (a) **model-visible** behavior (`ok:false
 | §11.8 (the worked example T-CFG-010 runs) sat at the very end of the file, after §16.5's audit result, though §0, §14.3.10 and `docs/config-reference.md` all cite it as §11.8 | Moved to its place between §11.7 and §12 |
 | §3.4 put `Provider` in `cairn-core/src/provider.rs` and `Tool` in `cairn-core/src/tool.rs`, but §3.2 assigns the `Provider` trait to `cairn-provider` and the `Tool` trait to `cairn-tools`, and gives `cairn-core` the dependency row `std, serde, thiserror` — which cannot express the `BoxStream` the same block already returns | The two file-path comments now name `cairn-provider/src/lib.rs` and `cairn-tools/src/lib.rs`; §3.2 is unchanged and `cairn-core` keeps its dependency row |
 | §3.4 declared `Provider::stream`, `Provider::count_tokens` and `Tool::execute` as `async fn`, which is not object-safe — the return type names `Self` — so the registry's `Box<dyn Provider>` and `Arc<dyn Tool>` would not compile | The three signatures now return `futures::future::BoxFuture<'a, …>`, and §3.4 states which traits need boxing and why |
-| D-02 makes one `CancellationToken` tree normative (§3.1, §3.4) but §15.2 listed no crate that provides it, because `tokio` does not | Added the `tokio-util` row (0.7) to §15.2 |
+| REQ-ARCH-007 tells executors to poll `token.cancelled()`, but the one D-02 token tree lives in `cairn-core::cancel::CancellationToken` — std-only by §3.2, so it cannot borrow a runtime crate's API — where the predicate is `is_cancelled()`; §15.2 also listed no crate for the tree, which invited a second token type to be added alongside it | REQ-ARCH-007 now names `token.is_cancelled()`; §15.2 still lists no crate, because `cairn-core` already *is* the one tree; §3.4 now says so explicitly. A reader who had reached for `tokio-util` (as an earlier draft of this row did) would have introduced a second, incompatible token |
 | §11.7 offers automatic migration on resume "when `migrate.auto = true`", but §11.4.1 — which claims to list every key — had no such key, so `cairn config` would reject it | Added `[migrate] auto = true` to §11.4.1 |
 | `cairn init` is named by P3's zero-config onboarding, §4.10's credentials lookup, §7.3's `.gitignore` rule, REQ-SAFE-003, T-SEC-014 and `cairn doctor`'s "no AGENTS.md found" hint — yet §11.1's command tree had no `init` | Added `cairn init [--global]` to §11.1 as the CLI form of §10.3's `/init`; it ships with M3 alongside `/init` |
 | §11.1 lists `--output` twice with two meanings — the global-flags table defines it as the output format (`text\|json\|stream-json\|tui`, key `output.format`) while the export signature defines it as a destination path, and a command may define only one long name | Both spellings are honoured by one flag: `cairn export` re-reads the global value as a path and excludes it from the `output.format` override for that subcommand only (`output.format` is an enum, so every path would fail with `E-CFG-BADVALUE`); a format spelling at `export` is refused with `E-CLI-USAGE` rather than creating a file called `json`, and the flag's help text states both meanings |
 | `crates/cairn-parse/Cargo.toml` described that crate as "tool-call argument parsers" — §4.3's job, which §3.2 assigns to `cairn-provider` — while §3.2 and §15.1 give it the tree-sitter wrapper | The manifest and the crate docs now read "Tree-sitter wrapper: grammars, queries, syntax validation (SPEC 5.2, 6.3.6, 6.7.4)" |
+| §3.2 gave `cairn-sse` the MAY-import list "tokio, bytes, thiserror", which contains no workspace crate, while §4.3 routes `E-PROV-EVENTBIG` and `E-PROV-IDLE` through it and `cairn-sse/Cargo.toml` — like every other crate — depends on `cairn-core` | Added `core` to the `cairn-sse` MAY row; `T-ARCH-001` already allowed it, so §3.2 was the side that disagreed |
+| `crates/cairn-sse/Cargo.toml` cited "SPEC 4.4" — request shaping — for a crate whose contract is §4.3 | The manifest now reads "SPEC 4.3, D-04" |
+| §4.3 rules 1–5 covered framing, fields, terminators, the 1 MiB cap and cross-read retention, but said nothing about end of stream, so a server that omits the final blank line could lose `[DONE]` or `message_stop` — and nothing about *how* to decode bytes that straddle reads | Rules 5 and 6 now state that decoding happens per event rather than per read (so a split UTF-8 sequence is not mistaken for invalid bytes) and that a pending event or final line is dispatched at EOF, a deliberate departure from the WHATWG discard |
+| §16.4 points at §4.5 for "provider paths", but §4.5's matrix covered only 15 of the 18 `E-PROV-*` codes in the registry: `E-PROV-EVENTBIG` (whose behaviour sat in §4.3), `E-PROV-FALLBACK` (REQ-PROV-008) and `E-PROV-OFFLINE` (§11.1) had no row, so their retry behaviour and their user-visible handling were nowhere tabled | Three rows added, completing the taxonomy: none is retryable, none takes a backoff, and each names the section that defines it |
+| §4.5 had no row for a connection lost mid-stream, which §4.7 resolves explicitly and which `cairn-sse`'s byte-source failures actually produce | A fourth row added under `E-PROV-NET`, stating that §4.7's policy applies: retry the whole call, discard partial content, never resume |
+| §3.4 wrote `fn stream<'a>(&'a self, …)` and `fn execute<'a>(&'a self, …)`, but each has exactly one borrowed input, so the named lifetime is what `clippy::needless_lifetimes` rejects — and `clippy -D warnings` is a gate (§15.4) | Both signatures now use `&self` / `BoxFuture<'_, …>`, which is the same bound; `count_tokens` keeps its `'a` because it must tie `&self` to a second borrowed input, and §3.4 says which is which so neither form is "restored" |
 
+| §4.5's matrix column was headed **Attempts**, while `E-PROV-MALFORMED`'s own note read "After 1 retry → fatal", §11.4.1's knob was `max_retries = 5`, and §4.5's own formula ran `n = 1..5` — so the same number was a retry count in two places and an attempt count in a third, T-PROV-005's "5 attempts" disagreed with T-PROV-040's "5-attempt budget", and §10.1/§10.9's status line read `attempt 2/5` against a column that counted retries | Column renamed to **Retries** — the number of backoffs, so a call makes one HTTP request more than that — with D-05 and the T-PROV-005/040/046 rows reworded to match. The status line now reads `retry 1/5`, which is what the first backoff actually is and what `max_retries` names. `model.error`'s `attempt` field keeps its name: it counts HTTP requests, which is what the field says |
+| §15.4's milestone rows are contiguous spans over each family's numbering *block*, so M1's exit criteria claimed `T-PROV-001..048` (015–019 have no definition row), `T-SESS-010..031` (014–019 and 024–029 have none), `T-SEC-001..003` (001 is referenced by REQ-SAFE-010 but defined nowhere, 003 does not occur in the document at all) and `T-ARCH-005..010` (009/010 likewise) — while §0 says a range "enumerates each integer as an individual case", so four of M1's criteria could never have been satisfied | M1's row now spans only ids that have a definition: `T-PROV-001..014, T-PROV-020..048, T-FAULT-001..006, T-SESS-010..013, T-SESS-020..023, T-SESS-030..031, T-CLI-010..017, T-SEC-002, T-ARCH-005..008`. The same overrun exists in the M0 and M2–M5 rows (`T-CFG-022..029`, `T-TOOL-018..100`, `T-CMD-057..099`, `T-PERM-014..019`, `T-PERF-001..004`, `T-OPS-013..019`, …); those stay as blocks because their milestones have not started — narrowing one is part of executing that milestone, and this row records it rather than a rule that would silently rewrite five rows at once. `T-SEC-001` remains referenced but undefined for the same reason (M2) |
 **Audit result:** all four self-check items pass, and `scripts/lint-docs.sh` verifies the two of them that can be mechanized (requirement→test coverage and error-code registry drift). No requirement lacks a test; no authoritative definition is duplicated with divergent content; every error path has both model-visible and user-visible behavior specified.

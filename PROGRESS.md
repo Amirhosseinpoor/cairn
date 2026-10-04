@@ -5,8 +5,10 @@ Maps to `SPEC.md` §15.4 milestones and §14.2 traceability. Updated at every ch
 ## Status: **M0 (Skeleton & contracts) — complete · M1 (Provider + headless loop) — in progress**
 
 M0 remains green; every gate below is re-run after each M1 change. M1 currently has the
-session store (`cairn-session`) and the three commands built on it (`sessions`, `export`,
-`migrate`) — see [M1 progress](#m1-progress).
+session store (`cairn-session`) with the three commands built on it (`sessions`, `export`,
+`migrate`), the hand-written SSE parser (`cairn-sse`, D-04), and `cairn-provider`'s boxed
+`Provider` trait with the §4.5 taxonomy as data, and the §4.5 retry policy (`cairn-provider::retry`)
+as pure, testable values — see [M1 progress](#m1-progress).
 
 ### Gates (re-run after any change)
 
@@ -15,11 +17,11 @@ session store (`cairn-session`) and the three commands built on it (`sessions`, 
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **247 passed, 0 failed, 0 warnings** |
-| MSRV | `cargo +1.83.0 test --workspace` | 247 passed (D-01 / `rust-version`) |
+| Tests | `cargo test --workspace` | **297 passed, 0 failed, 0 warnings** |
+| MSRV | `cargo +1.83.0 test --workspace` | 297 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
-| Advisories | `cargo audit` | 0 vulnerabilities in 141 crates |
+| Advisories | `cargo audit` | 0 vulnerabilities in 154 crates |
 | Documents | `scripts/lint-docs.sh` | 6 checks green (req→test, test ids, codes, links, fences, spec mirror) |
 | Schemas | `scripts/check-schemas.sh` | 33 event schemas + config schema, no drift |
 
@@ -50,10 +52,12 @@ session store (`cairn-session`) and the three commands built on it (`sessions`, 
 | `cairn-tui` | 7 |
 | `cairn-eventbus` | 6 |
 | `cairn-session` (M1) | 44 |
+| `cairn-sse` (M1) | 23 |
+| `cairn-provider` (M1) | 27 |
 | `cairn-cli` unit | 43 |
 | `cairn-cli` integration (`cli.rs`) | 33 |
 | `cairn-cli` architecture (`arch.rs`) | 12 |
-| **Total** | **247** |
+| **Total** | **297** |
 
 ### Documentation deliverables (§15.6)
 
@@ -80,6 +84,9 @@ session store (`cairn-session`) and the three commands built on it (`sessions`, 
 | `cairn-config`: layered load, merge, validation, `--effective`, JSON Schema + flag annotations | done | T-CFG-001..007, T-CFG-010..013, T-CFG-020, T-CFG-030 |
 | `cairn-cli`: full command tree + flags, `version`, `config`, `doctor`, `auth`, `mcp` | done | T-CLI-001 (partial), T-CLI-002, T-CLI-020..023, T-CFG-005 |
 | `cairn-session`: JSONL store, read contract, migration, export, GC (§11.7) | done (M1) | T-SESS-010, T-SESS-011, T-SESS-012, T-SESS-020, T-SESS-023, T-SESS-030, T-SESS-031 |
+| `cairn-sse`: §4.3 framing (partial lines across reads, CRLF, `id`/`retry` recorded, 1 MiB cap, EOF dispatch), 45 s idle timer, 250 ms cancellation | done (M1) | T-PROV-020, T-PROV-021, T-PROV-022, T-PROV-023, T-PROV-024, T-PROV-032 |
+| `cairn-provider`: boxed `Provider` trait (§3.4), `Capabilities`/`StreamEvent`/`ModelRequest`/`ProviderId`, and §4.5's retry matrix as values instead of five `match`es | done (M1) | §3.4, §4.2, §4.5, §4.8 |
+| `cairn-provider::retry` — §4.5's backoff formula as `delay_bounds`, `Retry-After` (seconds *and* HTTP-date), the 180 s `RetryBudget`, and an RNG that point ranges never reach | done (M1) | §4.5, REQ-PROV-005, T-PROV-005, T-PROV-040 |
 | `cairn-cli`: `sessions` on the real store, `export`, `migrate`, `resume <id>` load check | done (M1) | T-CLI-015, T-SEC-012 |
 | `cairn-tui`: slash-command registry (§10.3, REQ-TUI-004) | done | T-CLI-003 |
 | Stub crates for all 19 workspace members (compile + document boundaries) | done | T-ARCH-001, T-ARCH-003 |
@@ -88,11 +95,11 @@ session store (`cairn-session`) and the three commands built on it (`sessions`, 
 
 ### Not yet implemented (by milestone)
 
-- **M1** — `cairn-sse` (D-04), the `Provider` trait in `cairn-provider` (`Capabilities`,
-  `StreamEvent`, boxed futures per the amended §3.4), `cairn-parse`, `cairn-provider` (5 adapters,
-  §4.5 retry matrix, §4.8/§4.9 accounting + registry), the headless `run -p` loop with
-  text/json/stream-json and the §11.2 exit codes, logging + redaction (§12.1): T-PROV-*, T-FAULT-*,
-  T-CLI-010..014/016/017, T-ARCH-005..007. The session half (T-SESS-*) has landed — see below.
+- **M1** — `cairn-parse`, the five `cairn-provider` adapters (§4.4 shaping over the landed trait),
+  the §4.5 retry loop, §4.8/§4.9 accounting + registry, a mock provider with cassettes, the headless
+  `run -p` loop with text/json/stream-json and the §11.2 exit codes, logging + redaction (§12.1):
+  T-PROV-*, T-FAULT-*, T-CLI-010..014/016/017, T-SEC-001..003, T-ARCH-005..010. The session half
+  (T-SESS-*), `cairn-sse` (D-04) and the boxed `Provider` trait have landed — see below.
 - **M2** — tools, edit/fuzzy, bash, git, checkpoints, permissions: T-TOOL-*, T-EDIT-*, T-CMD-*, T-PERM-*, T-CHK-*
 - **M3** — context engine, index, TUI: T-CTX-*, T-TUI-*, T-PROMPT-*
 - **M4** — modes, guardrails, sandbox, injection defenses, subagents, MCP, hooks: T-MODE-*, T-SBOX-*, T-SEC-020..030, T-LOOP-*
@@ -124,6 +131,11 @@ testable — including the command `cairn doctor` points people at.
 | `cairn init [--global]` — the subcommand §11.1 was missing while P3, §4.10, §7.3, REQ-SAFE-003, T-SEC-014 and `cairn doctor`'s "no AGENTS.md" hint all told people to run it; it parses and reports `E-IMPL-STAGE` M3 (delivered with §10.3's `/init`) | done | §11.1, T-SEC-014 |
 | `[migrate] auto = true` — the §11.7 config key that §11.4.1 (which claims to list every key) did not define; `cairn config` would have rejected it | done | §11.4.1, §11.7 |
 | `hints_only_name_real_subcommands` — every ``cairn <cmd>`` that appears in a hint must be a real subcommand, so the `cairn init` gap cannot recur | done | §12.3 |
+| `cairn-sse` — a pure `SseParser` (bytes in, events out, no timers) plus an async `SseStream` that owns the idle deadline and the cancel poll; §4.3 rules 1–6 implemented, `E-PROV-EVENTBIG`/`E-PROV-IDLE` reported as codes rather than strings | done | T-PROV-020, T-PROV-021, T-PROV-022, T-PROV-023, T-PROV-024, T-PROV-032 |
+| `cairn-provider` — the boxed `Provider` trait exactly as §3.4 specifies it, `ProviderId`/`Capabilities`/`StreamEvent`/`ModelRequest`/`ToolSpec`/`ProviderHealth`, and `TokenCount` as an alias of `Usage` | done | §3.4, §4.2, §4.9 |
+| `ProviderFault` + `ProviderError` — §4.5's matrix as values (code, retryable, attempt budget, backoff shape), with a test that the 19 rows cover exactly the 18 `E-PROV-*` codes the registry holds | done | §4.5, §16.4 |
+| `Usage::estimate` / `Usage::reported` — REQ-PROV-011's flag can only be set at construction, and `Default` would have produced an *unflagged* estimate | done | §4.8 |
+| `cairn-provider::retry` — `delay_bounds(attempt, fault, retry_after)` returns `None` exactly where §4.5's *Retries* column says not to retry, `Backoff` picks the row's shape (full jitter / point / fixed / rate-limited floor), and `RetryBudget::afford` refuses rather than sleep past REQ-PROV-005's deadline | done | §4.5, T-PROV-005, T-PROV-040, T-PROV-046 |
 
 ### Decisions taken while landing the session store
 
@@ -143,7 +155,9 @@ testable — including the command `cairn doctor` points people at.
 
 ### Spec amendments landed with M1 (all recorded in §16.5)
 
-Written before the provider work starts, because two of them decide *where that code goes*.
+Items 1–3 were written before the provider work started, because two of them decide *where that
+code goes*. Items 4 and 9–17 were found while writing it — the pattern is the same as §16.5's
+own: a section that claims completeness, and does not have it.
 
 1. **§11.8 was at the end of the file**, after §16.5's audit result, though §0, §14.3.10 and
    `docs/config-reference.md` all cite it as §11.8 → moved between §11.7 and §12.
@@ -156,8 +170,14 @@ Written before the provider work starts, because two of them decide *where that 
    registry's `Box<dyn Provider>` and `Arc<dyn Tool>` would not compile → `Provider::stream`,
    `Provider::count_tokens` and `Tool::execute` now return `futures::future::BoxFuture<'a, …>`,
    with §3.4 stating which traits need boxing and why.
-4. **D-02's `CancellationToken` had no crate in §15.2** (tokio does not ship it) → `tokio-util` 0.7
-   row added.
+4. **D-02's `CancellationToken`: the amendment made here was wrong and has been reversed.** The
+   first draft added a `tokio-util` 0.7 row to §15.2 on the reasoning that `tokio` does not ship the
+   token. It does not — but `cairn-core::cancel::CancellationToken` already *is* the one D-02 tree,
+   std-only by §3.2 and covered by T-ARCH-007's tests, so a second token type would have violated
+   D-02's "one tree". §15.2 lists no crate for it; REQ-ARCH-007 now names `token.is_cancelled()`, the
+   predicate that type actually has; and §3.4 says outright which token every signature means.
+   `cairn-sse` polls it every 50 ms — which is why §4.3's 250 ms budget and REQ-ARCH-007's 100 ms
+   polling floor both hold.
 5. **`cairn init` did not exist in §11.1** despite six references, one of them normative
    (REQ-SAFE-003) → added as `cairn init [--global]`, the CLI form of §10.3's `/init`, stubbed to M3.
 6. **`migrate.auto` was referenced by §11.7 but absent from §11.4.1** → `[migrate] auto = true` added
@@ -167,6 +187,46 @@ Written before the provider work starts, because two of them decide *where that 
    syntax validation (SPEC 5.2, 6.3.6, 6.7.4)".
 8. **§11.1 lists `--output` twice with two meanings** → one flag with two readings (decision 5 above);
    a format spelling at `export` is refused with `E-CLI-USAGE` rather than creating a file called `json`.
+9. **§3.2 gave `cairn-sse` the MAY-import list "tokio, bytes, thiserror"** — no workspace crate at all —
+   while §4.3 routes `E-PROV-EVENTBIG` and `E-PROV-IDLE` through it and its manifest depends on
+   `cairn-core`, which `T-ARCH-001` already allowed → `core` added to the MAY row.
+10. **`cairn-sse`'s manifest cited "SPEC 4.4"**, which is request shaping; its contract is §4.3 →
+    corrected.
+11. **§4.3 said nothing about end of stream**, so a server that omits the final blank line would lose
+    `[DONE]`/`message_stop`, and nothing about how to decode bytes that straddle reads → rules 5 and
+    6 added: decode per event (so a split UTF-8 sequence is not mistaken for invalid bytes) and
+    dispatch a pending event or final line at EOF, a deliberate departure from WHATWG's discard.
+12. **§4.5's matrix covered 15 of the 18 `E-PROV-*` codes** — `E-PROV-EVENTBIG`, `E-PROV-FALLBACK`
+    and `E-PROV-OFFLINE` had no row — and had no row at all for a connection lost mid-stream, which
+    §4.7 defines and `cairn-sse` actually produces → four rows added; §4.5 now closes over §16.4's
+    claim that it holds "provider paths".
+13. **§3.4 wrote `fn stream<'a>(&'a self, …)` and `fn execute<'a>(&'a self, …)`** where the named
+    lifetime is exactly what `clippy::needless_lifetimes` rejects, and `clippy -D warnings` is a gate →
+    both elided (same bound), `count_tokens` left explicit because it must tie `&self` to a second
+    borrowed input, with §3.4 saying which is which so neither form gets "restored".
+14. **§4.3's "log `warn`" for lossy UTF-8 could not be done from `cairn-sse`**, which carries no
+    logger (and no §15.2 row gives it one) → the row now says the parser counts substitutions and
+    `cairn-provider` emits the `warn`, which is where §12.1's logging lives anyway.
+15. **§4.5's matrix column was headed *Attempts* while §4.5's own formula ran `n = 1..5` and
+    §11.4.1's knob was `max_retries = 5`**, and `E-PROV-MALFORMED`'s note called that same number
+    "1 retry" — so one number was a retry count in two places and an attempt count in a third.
+    The column is now **Retries** (backoffs taken; a call makes one HTTP request more than that),
+    D-05 and T-PROV-005/040/046 are reworded to match, and §10.1/§10.9's status line reads
+    `retry 1/5` instead of `attempt 2/5`, which was off by one against the column it illustrated.
+    `model.error`'s `attempt` field keeps its name — it counts HTTP requests.
+16. **T-PROV-005's expected cell read "total wait ≥ 7 s, ≤ 7.5 s, 5 attempts"**, which no run can
+    satisfy: §4.5 floors every one of the five backoffs at the header's 7 s, so the call waits
+    28–29 s. The 7–7.5 s band describes a *single* backoff (the first draw is exactly 7.0 s, since
+    the jitter term is ≤ 500 ms at n = 1) — the row now says that, and the exhaustion assertion is
+    stated separately as "5 retries then `E-PROV-RATELIMIT`".
+17. **§15.4's milestone rows are spans over each family's numbering *block*, but §0 says a range
+    enumerates every integer as its own case** — so M1 claimed `T-PROV-001..048` (015–019 undefined),
+    `T-SESS-010..031` (014–019, 024–029), `T-SEC-001..003` (001 defined nowhere, 003 absent from
+    the document) and `T-ARCH-005..010` (009/010 absent): four criteria that could never be met.
+    M1's row now spans only ids that have a definition. M0 and M2–M5 overrun the same way
+    (`T-TOOL-018..100`, `T-CMD-057..099`, `T-PERM-014..019`, `T-PERF-001..004`, `T-OPS-013..019`, …);
+    those are left as blocks to be narrowed by the milestone that executes them, so this entry
+    records it rather than a rule that would silently rewrite five rows at once.
 
 ## Known limitations of the M0 delivery
 
@@ -214,9 +274,22 @@ Written before the provider work starts, because two of them decide *where that 
 
 ## Next: M1 — Provider + headless loop
 
-The session store and its three commands are done, and the spec now agrees with where the
-provider code belongs. Next, in order: `cairn-sse` (hand-written SSE parser, D-04) →
-`cairn-provider` (the boxed `Provider` trait, `Capabilities`, `StreamEvent`, then the 5 adapters,
-the §4.5 retry matrix, and §4.8/§4.9 token/cost accounting + registry) → `cairn-parse` → headless
-`cairn run -p …` with text/json/stream-json output and the §11.2 exit codes → logging + redaction
-(§12.1). Every gate above must stay green as these land.
+The session store, `cairn-sse`, the boxed `Provider` trait and §4.5's retry policy are done, and
+the spec now agrees with where the provider code belongs. Next, in order:
+
+1. **The five adapters** (§4.4 shaping over the landed trait): Anthropic, OpenAI, an
+   OpenAI-compatible proxy, Ollama (NDJSON, §4.2 row 2) and vLLM — each reporting
+   `ProviderHealth` from `health()` without touching the network.
+2. **The §4.5 retry loop** — the *policy* is landed (`cairn-provider::retry`: `delay_bounds`,
+   `Retry-After` in seconds and HTTP-date, the 120 s cap, `RetryBudget`, cancellation-shaped
+   point ranges), what is missing is the `while` that drives it around a `Provider::stream` and
+   discards partial content per §4.7 (REQ-PROV-009). Needs the adapters from 1 to be real.
+3. **§4.8/§4.9**: `cairn/assets/models.json`, the registry lookup, the estimator fallback, and
+   REQ-PROV-012's cost formula.
+4. **The mock provider and its cassettes**, so T-PROV-001..048 and T-FAULT-001..006 can run
+   without a live key.
+5. **`cairn-parse`** (the tree-sitter wrapper).
+6. **Headless `cairn run -p …`** with text/json/stream-json output and the §11.2 exit codes
+   (T-CLI-010..014/016/017), then logging + redaction (§12.1).
+
+Every gate above must stay green as these land.
