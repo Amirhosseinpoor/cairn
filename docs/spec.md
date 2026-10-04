@@ -318,9 +318,9 @@ Crates in the workspace (paths in §15.1):
 
 | Crate | Responsibility | MAY import | MUST NOT import |
 |-------|----------------|-----------|-----------------|
-| `cairn-core` | Domain types: `Session`, `Message`, `Block`, `Event`, error codes, `TurnState` | std, serde, thiserror | any I/O crate, provider, tools, tui |
+| `cairn-core` | Domain types: `Session`, `Message`, `Block`, `Event`, error codes, `TurnState`, and the §4.9 model registry (parsed data, embedded at compile time) | std, serde, thiserror | any I/O crate, provider, tools, tui |
 | `cairn-sse` | SSE parsing over async bytes | core, tokio, bytes, thiserror | provider, tools |
-| `cairn-provider` | `Provider` trait, adapters, retry, token accounting | core, sse, reqwest, registry | tools, tui, sessionstore |
+| `cairn-provider` | `Provider` trait, adapters, retry, token accounting | core (which carries §4.9's registry), sse, reqwest | tools, tui, sessionstore |
 | `cairn-parse` | Tree-sitter wrapper, grammars, queries, syntax validation | tree-sitter, core | provider, tui |
 | `cairn-search` | File walking, ignore rules, grep, glob | ignore, grep-*, globset, core | provider, tui |
 | `cairn-index` | SQLite repo map, PageRank/BM25, incremental updates | rusqlite, parse, search, core | provider, tui, tools |
@@ -768,7 +768,12 @@ Rationale and rejected alternatives: [ADR-0020](docs/adr/ADR-0020.md).
 | OpenAI | `tiktoken-rs` `o200k_base` or `cl100k_base` per model registry field `tokenizer` | — |
 | Ollama | registry field; if `unknown` | estimator below |
 | vLLM/proxies | registry field; if `unknown` | estimator below |
-| any | — | `ceil(chars / 4)` for Latin; for CJK/code-heavy text `ceil(bytes/3)`; documented ±15% |
+| any | — | `ceil(chars / 4)` for Latin; for CJK/code-heavy text `ceil(bytes/3)`; documented ±15%. "Latin" means ASCII *and* at least 80% of the characters are letters, digits or spaces — prose sits near 95%, source code nearer 70%, which is the line the two formulas are drawn along. An empty prompt is 0 tokens, not 1 |
+
+A whole-prompt estimate sums the message text and the model-facing tool list (§6's tool
+descriptions and JSON Schemas). Per-adapter framing — §4.4's role wrappers and stop
+sequences — and image tiles are *not* counted: the first is provider-specific, the second
+is priced by the provider rather than by characters, and both are inside the ±15%.
 
 - REQ-PROV-011: Actual usage from the provider response MUST override estimates in cost accounting; estimates MUST be flagged `estimated: true` until then.
 - REQ-PROV-012: Cost = `(input_tokens - cache_read) * p_in + cache_read * p_cache_read + cache_write * p_cache_write + output * p_out`, all per-million, from the model registry; unknown price → cost `null` and UI shows `cost: n/a`.
@@ -835,9 +840,17 @@ Bundled at `cairn/assets/models.json`, overridable by `models_path`. JSON Schema
 }
 ```
 
+`auth_header` is a header *name* with an optional prefix, split on its first `:`. The
+bundled registry stores `"Authorization: Bearer"` (so the value becomes `Bearer <key>`)
+and Anthropic's bare `"x-api-key"` (so the value is the key alone); no `:` means no prefix.
+
+A `model` value MAY be a canonical id or any model's `aliases` entry. An alias resolves to
+its canonical id *before* `context_window` and `max_output` are read, so `model = "sonnet"`
+and `model = "anthropic/claude-sonnet-4-5"` are the same call with the same limits.
+
 Default models shipped: `anthropic/claude-sonnet-4-5` (default), `openai/gpt-5.1-codex`, `openai/o4-mini`, `ollama/qwen2.5-coder:14b`, `vllm/<custom>` (user must set `base_url`).
-- REQ-PROV-013: `cairn config validate` MUST reject a model id not present in registry unless `models.<id>.context_window` is explicitly defined by the user.
-- REQ-PROV-014: Registry updates ship with `cairn update`; a registry mismatch MUST NOT break startup (fall back to bundled copy).
+- REQ-PROV-013: `cairn config validate` MUST reject a model id that is in the registry neither as an id nor as an `aliases` entry, unless `models.<id>.context_window` is explicitly defined by the user.
+- REQ-PROV-014: Registry updates ship with `cairn update`; a registry mismatch MUST NOT break startup — fall back to the bundled copy and report `W-REG-FALLBACK`. An unreadable or malformed `models_path` override does the same, and `cairn config set models_path …` refuses a value it cannot read rather than writing one the next startup discards.
 
 ### 4.10 Credentials
 
@@ -3092,7 +3105,7 @@ deny_ending_turn_after = 3         # int 1..20 (§8.3 T-5)
 | `personalization.*` sums to 1.0 ± 0.001 | `E-CFG-SUM` |
 | Regex fields compiled at load (`redact_patterns`, permission `command_regex`) | `E-CFG-BADREGEX` |
 | Glob fields parsed by globset | `E-CFG-BADGLOB` |
-| `model` resolves in registry or has explicit `[models."id"]` | `E-CFG-NOMODEL` (REQ-PROV-013) |
+| `model` resolves in registry (id or §4.9 alias) or has explicit `[models."id"]` | `E-CFG-NOMODEL` (REQ-PROV-013) |
 | Unknown top-level/known-section keys rejected (strict) unless `--allow-unknown-keys` | `E-CFG-UNKNOWN` |
 | `schema_version` must be 1 (else migration §11.7.1) | `E-CFG-VERSION` |
 | `mode = auto_unsafe` requires `modes.allow_unsafe` (G-M1) | `E-CFG-UNSAFEBLOCKED` |
@@ -4379,4 +4392,5 @@ Every error code in §14.3.2b defines: (a) **model-visible** behavior (`ok:false
 
 | §4.5's matrix column was headed **Attempts**, while `E-PROV-MALFORMED`'s own note read "After 1 retry → fatal", §11.4.1's knob was `max_retries = 5`, and §4.5's own formula ran `n = 1..5` — so the same number was a retry count in two places and an attempt count in a third, T-PROV-005's "5 attempts" disagreed with T-PROV-040's "5-attempt budget", and §10.1/§10.9's status line read `attempt 2/5` against a column that counted retries | Column renamed to **Retries** — the number of backoffs, so a call makes one HTTP request more than that — with D-05 and the T-PROV-005/040/046 rows reworded to match. The status line now reads `retry 1/5`, which is what the first backoff actually is and what `max_retries` names. `model.error`'s `attempt` field keeps its name: it counts HTTP requests, which is what the field says |
 | §15.4's milestone rows are contiguous spans over each family's numbering *block*, so M1's exit criteria claimed `T-PROV-001..048` (015–019 have no definition row), `T-SESS-010..031` (014–019 and 024–029 have none), `T-SEC-001..003` (001 is referenced by REQ-SAFE-010 but defined nowhere, 003 does not occur in the document at all) and `T-ARCH-005..010` (009/010 likewise) — while §0 says a range "enumerates each integer as an individual case", so four of M1's criteria could never have been satisfied | M1's row now spans only ids that have a definition: `T-PROV-001..014, T-PROV-020..048, T-FAULT-001..006, T-SESS-010..013, T-SESS-020..023, T-SESS-030..031, T-CLI-010..017, T-SEC-002, T-ARCH-005..008`. The same overrun exists in the M0 and M2–M5 rows (`T-CFG-022..029`, `T-TOOL-018..100`, `T-CMD-057..099`, `T-PERM-014..019`, `T-PERF-001..004`, `T-OPS-013..019`, …); those stay as blocks because their milestones have not started — narrowing one is part of executing that milestone, and this row records it rather than a rule that would silently rewrite five rows at once. `T-SEC-001` remains referenced but undefined for the same reason (M2) |
+| §4.8 named its two estimator branches "Latin" and "CJK/code-heavy" without saying how to tell them apart, so any implementation picks a rule the section does not state; §4.9 defined `aliases` but never said a `model` value could be one, leaving REQ-PROV-013 to compare canonical ids only and reject `model = "sonnet"` with `E-CFG-NOMODEL`; §4.9's `auth_header` is a bare string the bundled registry fills with two different shapes (`"Authorization: Bearer"` and Anthropic's bare `"x-api-key"`) with no rule for reading them; and REQ-PROV-014 mandated a fallback while naming no warning, so `W-REG-FALLBACK` existed only in a test row and in `error.rs`, emitted by nothing | §4.8 now states the predicate — ASCII and ≥ 80% letters/digits/spaces ⇒ `ceil(chars/4)`, otherwise `ceil(bytes/3)` — and what a whole-prompt estimate does and does not count. §4.9 now says a `model` MAY be an id or an alias, resolving *before* limits are read, with REQ-PROV-013 and §11.4.2 following; `auth_header` is documented as `name[: prefix]` split on the first `:`; REQ-PROV-014 names `W-REG-FALLBACK` for both the bundled-copy case and an unusable `models_path`. The registry document itself moved to `cairn-core::registry` — it has two consumers (`cairn-config` for REQ-PROV-013, `cairn-provider` for §4.2/§4.8/§4.9) that may import only `core` (§3.2), and two parsers of one shipped file is how a model comes to validate and then fail to call — so §3.2's `cairn-core` responsibility column gained it and `registry` left `cairn-provider`'s MAY list, which named no crate |
 **Audit result:** all four self-check items pass, and `scripts/lint-docs.sh` verifies the two of them that can be mechanized (requirement→test coverage and error-code registry drift). No requirement lacks a test; no authoritative definition is duplicated with divergent content; every error path has both model-visible and user-visible behavior specified.

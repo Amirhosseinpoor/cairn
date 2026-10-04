@@ -592,11 +592,34 @@ pub fn load(opts: &LoadOptions) -> Loaded {
         paths.config_home = crate::paths::expand_tilde(&config.paths.config_dir, &get);
     }
 
+    // §4.9: `models_path` replaces the bundled registry for this run. A file
+    // that cannot be used does not break startup (REQ-PROV-014) — but it does
+    // not do so quietly either: §11.4.2's invalid-higher-layer-value row makes
+    // the fallback a `W-CFG-FALLBACK`, so a custom model that then fails with
+    // `E-CFG-NOMODEL` has an explanation above it.
+    let registry_override = if config.models_path.trim().is_empty() {
+        None
+    } else {
+        let path = crate::paths::expand_tilde(config.models_path.trim(), &get);
+        match crate::registry_from_path(&path) {
+            Ok(reg) => Some(reg),
+            Err(reason) => {
+                issues.push(Issue::warn(
+                    codes::REG_FALLBACK,
+                    format!("models_path unusable ({reason}); using the bundled registry"),
+                    Some("models_path"),
+                    "",
+                ));
+                None
+            }
+        }
+    };
+
     // Final validation (SPEC §11.4.2) — all issues, not fail-fast.
     let ctx = Ctx {
         is_tty: opts.is_tty,
         themes_dir: Some(paths.config_home.join("themes")),
-        registry: None,
+        registry: registry_override,
     };
     issues.extend(validate(&config, &ctx));
 
@@ -1129,6 +1152,85 @@ mod tests {
             loaded.fatal_issues()
         );
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// §4.9's `models_path`: an override that loads *is* the registry the
+    /// validator answers from, and one that does not falls back to the bundle
+    /// with `W-CFG-FALLBACK` rather than breaking startup (REQ-PROV-014).
+    ///
+    /// `model` is forced through the environment because it outranks the
+    /// project layer (§11.5), so a `~/.config/cairn/config.toml` on the machine
+    /// running the test cannot decide which model is being validated.
+    #[test]
+    fn models_path_overrides_the_registry_and_a_broken_one_warns() {
+        const CUSTOM: &str = r#"{
+          "schema_version": 1,
+          "updated_at": "2026-10-03T00:00:00Z",
+          "providers": {"demo": {"kind": "vllm", "base_url": "http://127.0.0.1:9999"}},
+          "models": {"demo/mine": {
+            "provider": "demo",
+            "context_window": 4096,
+            "max_output": 512,
+            "capabilities": {"tool_calling": false, "streaming": true,
+              "reasoning": false, "prompt_cache": false, "vision": false,
+              "parallel_tool_calls": false, "json_schema_strict": false},
+            "pricing": {"input_per_mtok": 0.0, "output_per_mtok": 0.0},
+            "tokenizer": "unknown",
+            "aliases": ["mine"]
+          }}
+        }"#;
+
+        let tmp = std::env::temp_dir().join(format!("cairn-models-{}", std::process::id()));
+        let ws = tmp.join("ws");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(ws.join(".cairn")).unwrap();
+
+        let registry = tmp.join("models.json");
+        std::fs::write(&registry, CUSTOM).unwrap();
+
+        let write_config = |models_path: &std::path::Path| {
+            std::fs::write(
+                ws.join(".cairn/config.toml"),
+                format!(
+                    "providers.demo.enabled = true\nmax_output_tokens = 256\nmodels_path = {:?}\n",
+                    models_path.display().to_string()
+                ),
+            )
+            .unwrap();
+        };
+        let load_ws = |env: BTreeMap<String, String>| {
+            load(&LoadOptions {
+                cwd: ws.clone(),
+                env: Some(env),
+                ..Default::default()
+            })
+        };
+        let forced = BTreeMap::from([("CAIRN_MODEL".to_string(), "demo/mine".to_string())]);
+
+        // The override is in force: `demo/mine` exists only in that file, so a
+        // validator still reading the bundle would report `E-CFG-NOMODEL`.
+        write_config(&registry);
+        let seen: Vec<&str> = load_ws(forced.clone())
+            .issues
+            .iter()
+            .map(|i| i.code)
+            .collect();
+        assert!(
+            !seen.contains(&codes::CFG_NOMODEL),
+            "the override was not used: {seen:?}"
+        );
+
+        // The override is unusable: the warning names the key, and the bundle
+        // answers again — with a rejection, not silence.
+        write_config(&tmp.join("missing.json"));
+        let seen: Vec<&str> = load_ws(forced).issues.iter().map(|i| i.code).collect();
+        assert!(seen.contains(&codes::REG_FALLBACK), "{seen:?}");
+        assert!(
+            seen.contains(&codes::CFG_NOMODEL),
+            "the bundle was not used as the fallback: {seen:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// REQ-CLI-006: effective view annotates every key with its layer.

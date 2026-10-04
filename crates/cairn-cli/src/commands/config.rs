@@ -426,6 +426,24 @@ pub(crate) fn check_config(
         Err(e) => return Err(schema_fail(&e, file, parts, text, old_text)),
     };
     let key = parts.join(".");
+
+    // §4.9: `models_path` must name a registry Cairn can read, or the value
+    // written here is one the next `load()` discards with `W-CFG-FALLBACK`.
+    // Checked only for the key being written, so a stale broken override does
+    // not block unrelated `cairn config set` calls.
+    if key == "models_path" && !cfg.models_path.trim().is_empty() {
+        let get: cairn_config::EnvLookup<'_> = &|k| std::env::var(k).ok();
+        let path = cairn_config::expand_tilde(cfg.models_path.trim(), get);
+        if let Err(reason) = cairn_config::registry_from_path(&path) {
+            return Err(Fail::new(
+                codes::CFG_BADVALUE,
+                cairn_core::error::ExitStatus::Usage,
+                format!("{}: {reason}", file.display()),
+                Some("value not written; point models_path at a readable models.json".to_string()),
+            ));
+        }
+    }
+
     for issue in validate(&cfg, &Ctx::default()) {
         let touches = issue
             .path

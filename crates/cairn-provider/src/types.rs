@@ -110,6 +110,28 @@ impl Capabilities {
             max_output: 0,
         }
     }
+
+    /// A §4.9 model row turned into §3.4's view of it (T-PROV-003:
+    /// `capabilities()` equals the registry row).
+    ///
+    /// Seven booleans from the row's `capabilities` object, two limits from
+    /// the row's `context_window` and `max_output` — which is why the struct
+    /// has nine fields and the JSON object has seven.
+    #[must_use]
+    pub const fn from_entry(entry: &cairn_core::registry::ModelEntry) -> Self {
+        let flags = entry.capabilities;
+        Self {
+            tool_calling: flags.tool_calling,
+            streaming: flags.streaming,
+            reasoning: flags.reasoning,
+            prompt_cache: flags.prompt_cache,
+            vision: flags.vision,
+            parallel_tool_calls: flags.parallel_tool_calls,
+            json_schema_strict: flags.json_schema_strict,
+            max_context: entry.context_window,
+            max_output: entry.max_output,
+        }
+    }
 }
 
 /// §3.4 `StreamEvent` — the only shape a caller ever sees, whatever the wire

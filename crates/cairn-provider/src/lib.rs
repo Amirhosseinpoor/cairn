@@ -6,14 +6,17 @@
 //! §4.9 [`ProviderId`], and [`ProviderFault`], which turns §4.5's retry matrix
 //! into values instead of five copies of the same `match`.
 //!
-//! Delivered in milestone **M1** (SPEC §15.4): the trait and the taxonomy land
-//! first, then the five adapters, the retry loop, the registry and the mock
-//! provider with its cassettes.
+//! Delivered in milestone **M1** (SPEC §15.4): the trait, §4.5's taxonomy and
+//! retry policy, and §4.8/§4.9's registry and cost accounting are in place;
+//! what is left is the five adapters, the retry loop, and the mock provider
+//! with its cassettes.
 
+mod accounting;
 mod error;
 mod retry;
 mod types;
 
+pub use accounting::{cost_usd, estimate_request, estimate_tokens};
 pub use error::{Backoff, ProviderError, ProviderFault, ALL_FAULTS};
 pub use retry::{
     delay_bounds, parse_retry_after, sample_delay, RetryBudget, MAX_TOTAL, RATE_LIMIT_CAP,

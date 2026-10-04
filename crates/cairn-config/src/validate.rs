@@ -7,43 +7,73 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// Bundled model registry (`assets/models.json`, SPEC §4.9).
+/// §4.9's registry, narrowed to what validation asks of it (REQ-PROV-013).
+///
+/// The parsed document lives in `cairn_core::registry`, which `cairn-provider`
+/// reads too: two parsers of one shipped file is how a model comes to validate
+/// and then fail to call.
 #[derive(Debug, Clone, Default)]
 pub struct Registry {
     pub model_ids: Vec<String>,
     pub max_output: BTreeMap<String, u32>,
     pub context_window: BTreeMap<String, u32>,
     pub providers: Vec<String>,
+    /// §4.9's `aliases`: a short name mapped to the canonical id it stands for.
+    aliases: BTreeMap<String, String>,
 }
 
-// Model limits come from the bundled `assets/models.json` and are bounded by
-// the schema, so narrowing them to `u32` cannot lose anything real.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "bundled model limits are far below u32::MAX"
-)]
+impl Registry {
+    /// The canonical id behind a configured value — itself when the registry
+    /// lists it, otherwise an alias of something it does (§4.9 `aliases`).
+    ///
+    /// Both branches return a string owned by `self`, so the borrow does not
+    /// depend on how long the caller's `id` lives.
+    #[must_use]
+    pub fn resolve_id(&self, id: &str) -> Option<&str> {
+        self.model_ids
+            .iter()
+            .find(|m| m.as_str() == id)
+            .or_else(|| self.aliases.get(id))
+            .map(String::as_str)
+    }
+
+    /// REQ-PROV-013's "present in the registry".
+    #[must_use]
+    pub fn resolves(&self, id: &str) -> bool {
+        self.resolve_id(id).is_some()
+    }
+}
+
 fn registry_from_json(text: &str) -> Result<Registry, String> {
-    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let parsed = cairn_core::registry::Registry::parse(text).map_err(|e| e.to_string())?;
     let mut r = Registry::default();
-    let models = v
-        .get("models")
-        .and_then(serde_json::Value::as_object)
-        .ok_or("models missing")?;
-    for (id, m) in models {
+    for (id, model) in &parsed.models {
         r.model_ids.push(id.clone());
-        if let Some(mo) = m.get("max_output").and_then(serde_json::Value::as_u64) {
-            r.max_output.insert(id.clone(), mo as u32);
-        }
-        if let Some(cw) = m.get("context_window").and_then(serde_json::Value::as_u64) {
-            r.context_window.insert(id.clone(), cw as u32);
+        r.max_output.insert(id.clone(), model.max_output);
+        r.context_window.insert(id.clone(), model.context_window);
+        for alias in &model.aliases {
+            // Two models claiming one alias: the first id in document order
+            // wins, so the answer never depends on JSON iteration order.
+            r.aliases.entry(alias.clone()).or_insert_with(|| id.clone());
         }
     }
-    if let Some(providers) = v.get("providers").and_then(serde_json::Value::as_object) {
-        r.providers = providers.keys().cloned().collect();
-    }
+    r.providers = parsed.providers.keys().cloned().collect();
     r.model_ids.sort();
-    r.providers.sort();
     Ok(r)
+}
+
+/// Parse a `models_path` override (§4.9). `Err` text is what the caller shows,
+/// so an unreadable file is reported rather than silently ignored — falling
+/// back to the bundle behind a user's back is how a custom model turns into a
+/// confusing `E-CFG-NOMODEL`.
+///
+/// # Errors
+///
+/// Returns the reason the file could not be used as a registry.
+pub fn registry_from_path(path: impl AsRef<std::path::Path>) -> Result<Registry, String> {
+    let path = path.as_ref();
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    registry_from_json(&text)
 }
 
 /// Parse the bundled registry (SPEC §4.9). Falls back to an empty registry if the
@@ -51,25 +81,13 @@ fn registry_from_json(text: &str) -> Result<Registry, String> {
 #[must_use]
 pub fn bundled_registry() -> &'static Registry {
     static REG: OnceLock<Registry> = OnceLock::new();
-    REG.get_or_init(|| {
-        registry_from_json(include_str!("../../../assets/models.json")).unwrap_or_default()
-    })
+    REG.get_or_init(|| registry_from_json(cairn_core::registry::BUNDLED_JSON).unwrap_or_default())
 }
 
 /// Registry snapshot date baked into the binary (SPEC §4.9 `updated_at`).
 #[must_use]
 pub fn registry_updated_at() -> &'static str {
-    static DATE: OnceLock<String> = OnceLock::new();
-    DATE.get_or_init(|| {
-        serde_json::from_str::<serde_json::Value>(include_str!("../../../assets/models.json"))
-            .ok()
-            .and_then(|v| {
-                v.get("updated_at")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_default()
-    })
+    &cairn_core::registry::bundled().updated_at
 }
 
 /// Extra context validation needs (things that depend on the environment).
@@ -259,9 +277,16 @@ pub fn validate(cfg: &Config, ctx: &Ctx) -> Vec<Issue> {
         ));
     }
 
-    // model resolves in the registry or has an explicit override (REQ-PROV-013)
+    // §4.9's `models_path` is a path field, so §11.4.2's absolute-or-`~` rule
+    // reaches it too: a relative one would resolve against whatever cwd the
+    // next run happens to start in.
+    check_paths(&mut out, "models_path", &cfg.models_path, "");
+
+    // model resolves in the registry (by id or by a §4.9 alias) or has an
+    // explicit override (REQ-PROV-013)
     let model_override = cfg.models.get(&cfg.model);
-    if model_override.is_none() && !reg.model_ids.contains(&cfg.model) {
+    let canonical = reg.resolve_id(&cfg.model);
+    if model_override.is_none() && canonical.is_none() {
         out.push(Issue::error(
             codes::CFG_NOMODEL,
             format!(
@@ -274,7 +299,9 @@ pub fn validate(cfg: &Config, ctx: &Ctx) -> Vec<Issue> {
     }
     let model_max_output = model_override
         .and_then(|m| m.max_output)
-        .or_else(|| reg.max_output.get(&cfg.model).copied())
+        // Limits are keyed by canonical id, so a configured alias looks up the
+        // numbers of the model it stands for rather than nothing.
+        .or_else(|| canonical.and_then(|id| reg.max_output.get(id).copied()))
         .unwrap_or(u32::MAX);
     if cfg.max_output_tokens == 0 || cfg.max_output_tokens > model_max_output {
         out.push(Issue::error(
@@ -1169,6 +1196,66 @@ mod tests {
         assert_eq!(r.max_output["anthropic/claude-sonnet-4-5"], 64000);
         assert_eq!(r.context_window["anthropic/claude-sonnet-4-5"], 200_000);
         assert!(r.providers.contains(&"anthropic".to_string()));
+    }
+
+    /// §4.9's `aliases` are addressable: `model = "sonnet"` is the same model
+    /// as its canonical id, limits and all. Before this, an alias fell through
+    /// to `E-CFG-NOMODEL` because only canonical ids were compared.
+    #[test]
+    fn a_registry_alias_resolves_to_the_canonical_model() {
+        let r = bundled_registry();
+        assert_eq!(
+            r.resolve_id("anthropic/claude-sonnet-4-5"),
+            Some("anthropic/claude-sonnet-4-5")
+        );
+        assert_eq!(r.resolve_id("sonnet"), Some("anthropic/claude-sonnet-4-5"));
+        assert_eq!(r.resolve_id("codex"), Some("openai/gpt-5.1-codex"));
+        assert_eq!(r.resolve_id("local"), Some("ollama/qwen2.5-coder:14b"));
+        assert_eq!(r.resolve_id("not-a-model"), None);
+        assert!(r.resolves("sonnet"));
+        assert!(!r.resolves("not-a-model"));
+
+        // The numbers the validator applies are the canonical model's.
+        let alias = r.resolve_id("sonnet").expect("resolves");
+        assert_eq!(
+            r.max_output.get(alias),
+            r.max_output.get("anthropic/claude-sonnet-4-5")
+        );
+        assert_eq!(
+            r.context_window.get(alias),
+            r.context_window.get("anthropic/claude-sonnet-4-5")
+        );
+
+        let aliased = Config {
+            model: "sonnet".to_string(),
+            ..Config::default()
+        };
+        assert!(
+            codes_of(&validate(&aliased, &Ctx::default())).is_empty(),
+            "a §4.9 alias must not be reported as E-CFG-NOMODEL"
+        );
+
+        let unknown = Config {
+            model: "not-a-model".to_string(),
+            ..Config::default()
+        };
+        assert!(codes_of(&validate(&unknown, &Ctx::default())).contains(&codes::CFG_NOMODEL));
+    }
+
+    /// A `models_path` override that cannot be read or parsed is reported, not
+    /// quietly replaced by the bundle (§4.9, REQ-PROV-014).
+    #[test]
+    fn a_broken_models_path_override_says_why() {
+        assert!(registry_from_path("/nonexistent/models.json").is_err());
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("models.json");
+        std::fs::write(&path, "{ not json").expect("write");
+        assert!(registry_from_path(path.to_str().expect("utf8")).is_err());
+
+        std::fs::write(&path, include_str!("../../../assets/models.json")).expect("write");
+        let ok = registry_from_path(path.to_str().expect("utf8")).expect("parses");
+        assert!(!ok.model_ids.is_empty());
     }
 
     /// T-CFG-006: defaults validate clean.

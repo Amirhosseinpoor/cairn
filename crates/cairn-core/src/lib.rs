@@ -15,6 +15,7 @@ pub mod ids;
 pub mod message;
 pub mod mode;
 pub mod redact;
+pub mod registry;
 pub mod shutdown;
 
 pub use cancel::CancellationToken;

@@ -20,7 +20,9 @@ pub use load::{
 pub use model::{Config, SCHEMA_VERSION};
 pub use paths::{discover_workspace, expand_tilde, is_abs_or_tilde, EnvLookup, Paths};
 pub use schema::{effective, json_schema, json_schema_pretty, EffectiveEntry, FlagSpec, FLAGS};
-pub use validate::{bundled_registry, registry_updated_at, validate, Ctx, Registry};
+pub use validate::{
+    bundled_registry, registry_from_path, registry_updated_at, validate, Ctx, Registry,
+};
 
 #[cfg(test)]
 mod tests {
