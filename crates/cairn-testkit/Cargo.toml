@@ -1,0 +1,13 @@
+[package]
+name = "cairn-testkit"
+description = "Eval suite: 30 tasks, state scan, metrics (SPEC 13, D-17)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+[lints]
+workspace = true

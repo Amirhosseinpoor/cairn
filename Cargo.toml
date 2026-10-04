@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+license = "Apache-2.0"
+authors = ["Cairn contributors"]
+
+[workspace.dependencies]
+# --- serialization / config (D-10, D-16) ---
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = { version = "0.8", features = ["preserve_order"] }
+schemars = { version = "0.8", features = ["preserve_order"] }
+# --- errors (D-15) ---
+thiserror = "2"
+# --- misc (D-01..D-18) ---
+regex = "1"
+globset = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+getrandom = "0.2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4.5"
+toml_edit = "0.22"
+# --- internal crates ---
+# `version` is required alongside `path` so cargo-deny can resolve the entry
+# (a path-only workspace dependency reads as a `*` wildcard, which the D-13
+# bans check rejects). Keep it in step with `[workspace.package].version`.
+cairn-core = { path = "crates/cairn-core", version = "0.1.0" }
+cairn-eventbus = { path = "crates/cairn-eventbus", version = "0.1.0" }
+cairn-config = { path = "crates/cairn-config", version = "0.1.0" }
+# --- dev-dependencies ---
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+pretty_assertions = "1"
+
+[workspace.lints.rust]
+# REQ-ARCH-004: `unsafe` is confined to cairn-sandbox (which opts out explicitly).
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Spec-mandated shapes that clippy pedantic fights with:
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# `assert!(x.is_empty())` is clearer than the `assert_ne!(x, [] as [T; 0])`
+# rewrite this lint suggests; it only fires in tests.
+assert_is_empty = "allow"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+opt-level = 3
+incremental = false
+
+[profile.dev]
+opt-level = 1
+debug = 1

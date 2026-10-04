@@ -1,0 +1,4 @@
+[resolver]
+# Honour each package's declared `rust-version` when resolving (D-01 / MSRV 1.83):
+# prefer dependency versions that still build on it instead of the newest.
+incompatible-rust-versions = "fallback"

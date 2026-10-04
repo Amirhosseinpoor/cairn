@@ -1,0 +1,13 @@
+[package]
+name = "cairn-index"
+description = "Workspace .cairn index: cache, SQLite path index, embeddings (SPEC 5.4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+[lints]
+workspace = true

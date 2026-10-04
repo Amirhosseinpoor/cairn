@@ -1,0 +1,136 @@
+# SPEC §14.7 (CI matrix) + §15.3 (build/lint/format/coverage commands).
+#
+# M0 ships the three jobs the milestone promises — `lint`, `unit-int` on 3 OS,
+# and `coverage` — plus `msrv`, which is what actually proves D-01's "Rust
+# 1.83" claim (the toolchain file deliberately asks for `stable`, see the
+# comment in `rust-toolchain.toml`). The remaining §14.7 jobs (`tui`, `fuzz`,
+# `sec`, `perf`, `eval-mock`, `eval-live`, `mutation`, `xplat-e2e`, `release`)
+# are added by the milestones that deliver their subject matter.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------- lint (§14.7)
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+
+      - name: rustfmt (§15.3 "Format")
+        run: cargo fmt --all -- --check
+
+      - name: clippy (§15.3 "Lint")
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo-deny (D-13 licences, bans, sources)
+        run: cargo deny check
+
+      - name: cargo-audit (dependency advisories)
+        run: cargo audit
+
+      - name: documentation (§16.1 REQ/T-ID coverage, error-code drift, links)
+        run: ./scripts/lint-docs.sh
+
+      - name: schemas (§15.3 "Schemas", REQ-ARCH-009 / §11.4.3)
+        run: ./scripts/check-schemas.sh
+
+      - name: rustdoc (§15.3 "Docs")
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --workspace
+
+  # ------------------------------------------------------- unit + integration (§14.7)
+  unit-int:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test --workspace (§15.3 "Test")
+        run: cargo test --workspace --locked
+
+  # --------------------------------------------------------------- coverage (§14.7)
+  coverage:
+    name: coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      # §15.4 M0 exit criteria: ≥ 70% line coverage on both crates.
+      # §14.7 also sets the workspace total (≥ 80% line) as a release gate.
+      - name: coverage thresholds
+        run: |
+          cargo llvm-cov --package cairn-config --fail-under-lines 70 --summary-only
+          cargo llvm-cov --package cairn-core    --fail-under-lines 70 --summary-only
+          cargo llvm-cov --workspace             --fail-under-lines 80 --summary-only
+
+      - name: lcov report (§15.3 "Coverage")
+        run: cargo llvm-cov --workspace --lcov --out lcov.info
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+
+  # ------------------------------------------------------------------ msrv (D-01)
+  msrv:
+    name: msrv (1.83)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # `rust-toolchain.toml` pins the *development* channel to `stable`; the
+      # declared MSRV (`Cargo.toml` `rust-version`) is what the rest of the
+      # workspace is written against, so it gets its own job.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.83.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: cargo +1.83.0 check --workspace --all-targets
+        run: cargo +1.83.0 check --workspace --all-targets --locked
+
+      - name: cargo +1.83.0 test --workspace
+        run: cargo +1.83.0 test --workspace --locked

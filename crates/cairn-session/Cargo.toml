@@ -1,0 +1,13 @@
+[package]
+name = "cairn-session"
+description = "Session store: JSONL records, SQLite index, export (SPEC 11.7)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+[lints]
+workspace = true

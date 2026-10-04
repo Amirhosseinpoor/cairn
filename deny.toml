@@ -1,0 +1,54 @@
+# cargo-deny configuration — SPEC §15.1, REQ-TECH-002 (D-13).
+#
+# CI runs `cargo deny check licenses bans sources advisories`; each check maps
+# to a requirement:
+#   licenses → REQ-TECH-002 (permissive-only dependency policy, D-13)
+#   bans     → REQ-ARCH-001 (no cyclic / forbidden dependency edges)
+#   sources  → REQ-PROD (only crates.io, reproducible builds)
+#
+# Verify locally with:  cargo deny check
+
+[graph]
+all-features = false
+no-default-features = false
+
+[licenses]
+version = 2
+# D-13: "Permissive only: MIT, Apache-2.0, BSD-2/3, ISC, Unlicense, Zlib.
+# MIT-0 accepted."  Copyleft in any linking position is rejected. No exceptions.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unlicense",
+    "Zlib",
+    "MIT-0",
+    # `unicode-ident` (via proc-macro2/syn → clap, schemars) carries the
+    # expression `(MIT OR Apache-2.0) AND Unicode-3.0`. Unicode-3.0 is
+    # OSI-approved and permissive — D-13 rejects copyleft, not permissives
+    # outside its illustrative list.
+    "Unicode-3.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Internal crates are path-only (`cairn-core = { path = … }` in the workspace
+# table), so they carry no version. They are not published and cannot be a
+# supply-chain wildcard; the rule still applies to registry dependencies.
+allow-wildcard-paths = true
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[advisories]
+version = 2
+ignore = []

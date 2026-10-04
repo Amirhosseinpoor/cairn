@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+*.swp
+.DS_Store
+/.mutants
+/coverage/
+/lcov.info
+/tmp/

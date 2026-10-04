@@ -1,0 +1,20 @@
+# SPEC §15.1 / §15.3 — "pinned stable … + components rustfmt, clippy".
+#
+# The channel is `stable` rather than a point release: D-01 fixes the *MSRV*
+# at 1.83 (`Cargo.toml` `rust-version`), which is enforced by
+# `.cargo/config.toml` (`resolver.incompatible-rust-versions = "fallback"`, so
+# every dependency still resolves to something that builds on 1.83) and by the
+# `msrv` CI job, which runs `cargo +1.83 check --workspace --all-targets`.
+# Pinning the *toolchain* to 1.83 would instead break dependency resolution
+# outright: cargo 1.83 cannot parse the `edition2024` manifests that several
+# crates in the graph now ship, and the MSRV-aware resolver it would need is
+# only available from cargo 1.84. Development therefore runs on current
+# stable; reproducibility of the *build inputs* comes from the committed
+# `Cargo.lock`, not from the compiler patch level.
+#
+# `channel = "stable"` also guarantees `rustfmt` and `clippy` are installed
+# for anyone on rustup, so `cargo fmt --check` and
+# `cargo clippy --workspace --all-targets -- -D warnings` (§15.3) always work.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

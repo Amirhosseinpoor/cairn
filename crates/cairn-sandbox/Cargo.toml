@@ -1,0 +1,25 @@
+[package]
+name = "cairn-sandbox"
+description = "OS sandbox backends for bash (SPEC 9.5, REQ-SAFE-006/007)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+# REQ-ARCH-004: this is the one crate allowed to contain `unsafe`, so it cannot
+# use `lints.workspace = true` (Cargo forbids overriding a workspace lint). The
+# workspace table is mirrored below with only `unsafe_code` flipped; test
+# T-ARCH-004 keeps the two in step.
+[lints.rust]
+unsafe_code = "allow"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

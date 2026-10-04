@@ -1,0 +1,23 @@
+[package]
+name = "cairn-config"
+description = "Layered configuration: load, merge, validate, effective view, JSON Schema (SPEC 11)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+schemars.workspace = true
+regex.workspace = true
+globset.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true

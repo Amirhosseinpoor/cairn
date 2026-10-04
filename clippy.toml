@@ -1,0 +1,17 @@
+# SPEC §15.3 — "`clippy.toml` tuned": MSRV plus the few thresholds the default
+# values get wrong for a codebase that mirrors normative tables from SPEC.md.
+
+# D-01 / `Cargo.toml rust-version`: everything must build on 1.83.
+msrv = "1.83"
+
+# `clippy::too_many_lines` default is 100. SPEC-shaped functions are long by
+# construction: the CLI flag tables (§11.1), the validator that walks the
+# §11.4.2 violation table, and the §3.5 event catalogue are straight-line
+# enumerations rather than branching logic. 200 keeps the lint meaningful
+# (a genuinely convoluted function still trips it) without flagging those.
+too-many-lines-threshold = 200
+
+# `clippy::struct_excessive_bools` default is 3. A struct that mirrors an
+# option table (§11.1 run flags, §11.4.1 `[modes]`/`[ui]`) is bool-heavy by
+# definition; 8 still catches a struct that has drifted into a flag dump.
+max-struct-bools = 8

@@ -1,0 +1,2499 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Config",
+  "description": "Root `config.toml` document (SPEC §11.4.1).",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Must be 1; anything else triggers migration (SPEC §11.7.1).",
+      "default": 1,
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "profile": {
+      "description": "Profile selector `^[a-z0-9_-]{1,32}$`.",
+      "default": "default",
+      "type": "string",
+      "pattern": "^[a-z0-9_-]{1,32}$"
+    },
+    "mode": {
+      "description": "Operating mode (SPEC §7).",
+      "default": "build",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Mode"
+        }
+      ]
+    },
+    "model": {
+      "description": "Registry model id (`provider/model`, REQ-PROV-013).",
+      "default": "anthropic/claude-sonnet-4-5",
+      "type": "string"
+    },
+    "temperature": {
+      "description": "Sampling temperature, `0.0..=2.0`.",
+      "default": 0.2,
+      "type": "number",
+      "format": "double"
+    },
+    "max_output_tokens": {
+      "description": "Hard output cap, `1..=model.max_output`.",
+      "default": 8192,
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "system_prompt_extra": {
+      "description": "Appended to the system prompt, `≤ 4000` chars.",
+      "default": "",
+      "type": "string"
+    },
+    "providers": {
+      "description": "Per-provider settings keyed by provider id (SPEC §4.5).",
+      "default": {
+        "anthropic": {
+          "enabled": true,
+          "base_url": "https://api.anthropic.com",
+          "api_key": "",
+          "max_retries": 5,
+          "idle_timeout_ms": 45000,
+          "max_total_ms": 180000,
+          "ca_bundle": ""
+        },
+        "ollama": {
+          "enabled": true,
+          "base_url": "http://127.0.0.1:11434",
+          "api_key": "",
+          "max_retries": 5,
+          "idle_timeout_ms": 45000,
+          "max_total_ms": 180000,
+          "ca_bundle": ""
+        },
+        "openai": {
+          "enabled": true,
+          "base_url": "https://api.openai.com",
+          "api_key": "",
+          "max_retries": 5,
+          "idle_timeout_ms": 45000,
+          "max_total_ms": 180000,
+          "ca_bundle": ""
+        },
+        "vllm": {
+          "enabled": true,
+          "base_url": "http://127.0.0.1:8000",
+          "api_key": "",
+          "max_retries": 5,
+          "idle_timeout_ms": 45000,
+          "max_total_ms": 180000,
+          "ca_bundle": ""
+        }
+      },
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/ProviderConfig"
+      }
+    },
+    "models": {
+      "description": "Per-model overrides keyed by registry id (REQ-PROV-014).",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/ModelOverride"
+      }
+    },
+    "models_path": {
+      "description": "Path to a custom `models.json` (\"\" = bundled registry).",
+      "default": "",
+      "type": "string"
+    },
+    "shell": {
+      "default": {
+        "command": "",
+        "env_allowlist": [
+          "PATH",
+          "HOME",
+          "USER",
+          "LOGNAME",
+          "SHELL",
+          "TERM",
+          "LANG",
+          "LC_ALL",
+          "TZ",
+          "PWD",
+          "TMPDIR",
+          "COLORTERM",
+          "DISPLAY",
+          "XDG_RUNTIME_DIR",
+          "SSH_AUTH_SOCK",
+          "GOPATH",
+          "CARGO_HOME",
+          "JAVA_HOME",
+          "NODE_PATH",
+          "PYTHONPATH",
+          "VIRTUAL_ENV",
+          "CI"
+        ],
+        "inherit_cairn_env": false,
+        "default_timeout_ms": 120000,
+        "kill_grace_ms": 2000,
+        "allow_pty": false,
+        "interactive_detection": true
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/ShellConfig"
+        }
+      ]
+    },
+    "discovery": {
+      "default": {
+        "max_file_size_bytes": 8388608,
+        "max_entries": 500000,
+        "max_depth": 64,
+        "include": [],
+        "exclude": [],
+        "follow_symlinks": false
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/DiscoveryConfig"
+        }
+      ]
+    },
+    "repo_map": {
+      "default": {
+        "enabled": true,
+        "top_k": 40,
+        "max_tokens": 16000,
+        "pagerank_damping": 0.85,
+        "pagerank_iterations": 20,
+        "weights": {
+          "page": 0.55,
+          "bm25": 0.45
+        },
+        "personalization": {
+          "current_file": 0.6,
+          "touched": 0.3,
+          "uniform": 0.1
+        },
+        "bm25": {
+          "k1": 1.2,
+          "b": 0.75,
+          "name_boost": 3.0,
+          "path_boost": 1.5,
+          "signature_boost": 1.2,
+          "doc_boost": 1.0
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/RepoMapConfig"
+        }
+      ]
+    },
+    "index": {
+      "default": {
+        "debounce_ms": 300,
+        "watch": true,
+        "max_age_days": 30,
+        "db_path": ""
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/IndexConfig"
+        }
+      ]
+    },
+    "context": {
+      "default": {
+        "history_budget_pct": 55,
+        "system_prompt_pct": 8,
+        "tools_pct": 6,
+        "repo_map_pct": 10,
+        "pinned_pct": 15,
+        "output_reserve_pct": 12,
+        "tool_output_max_bytes": 8192,
+        "compaction_threshold": 0.8,
+        "compaction_max_attempts": 3,
+        "compaction_keep_messages": 12,
+        "history_keep_compactions": 5
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/ContextConfig"
+        }
+      ]
+    },
+    "auto": {
+      "default": {
+        "max_iterations": 40,
+        "max_tool_calls": 120,
+        "max_wall_ms": 600000,
+        "max_cost_usd": 2.0,
+        "max_files_changed": 40,
+        "max_consecutive_failures": 5,
+        "loop_detection": true,
+        "allow_commit": false,
+        "allow_network": true,
+        "allow_pty": false
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/AutoConfig"
+        }
+      ]
+    },
+    "session": {
+      "default": {
+        "max_cost_usd": 20.0,
+        "max_tool_calls": 3000,
+        "retention_days": 90,
+        "max_sessions": 500,
+        "auto_recover": false,
+        "kill_jobs_on_exit": false
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/SessionConfig"
+        }
+      ]
+    },
+    "checkpoint": {
+      "default": {
+        "enabled": true,
+        "per_tool": false,
+        "keep_per_session": 50,
+        "keep_total": 200,
+        "max_total_bytes": 1073741824,
+        "fast_path_max_files": 1000
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/CheckpointConfig"
+        }
+      ]
+    },
+    "security": {
+      "default": {
+        "sandbox": "auto",
+        "allow_unsafe_shell": false,
+        "allow_protected_paths": [],
+        "additional_dirs": [],
+        "additional_dirs_writable": false,
+        "redact_patterns": [],
+        "share_permissions": false,
+        "load_grammar_plugins": true,
+        "verify_untrusted_html": false
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/SecurityConfig"
+        }
+      ]
+    },
+    "network": {
+      "default": {
+        "offline": false,
+        "allow_hosts": [],
+        "proxy": "",
+        "timeout_ms": 30000
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/NetworkConfig"
+        }
+      ]
+    },
+    "plans": {
+      "default": {
+        "shareable": false,
+        "editor": "internal",
+        "auto_approve": false
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/PlansConfig"
+        }
+      ]
+    },
+    "modes": {
+      "description": "`--dangerously-skip-permissions` home (G-M1; see PROGRESS clarification 1).",
+      "default": {
+        "allow_unsafe": false
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/ModesConfig"
+        }
+      ]
+    },
+    "subagent": {
+      "default": {
+        "enabled": true,
+        "max_parallel": 4,
+        "max_depth": 2,
+        "inherit_unsafe": false,
+        "timeout_ms": 600000
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/SubagentConfig"
+        }
+      ]
+    },
+    "verify": {
+      "default": {
+        "enabled": true,
+        "commands": [],
+        "max_attempts": 3,
+        "timeout_ms": 300000
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/VerifyConfig"
+        }
+      ]
+    },
+    "todo": {
+      "description": "Reserved section with no keys (SPEC §11.4.1).",
+      "default": {},
+      "allOf": [
+        {
+          "$ref": "#/definitions/TodoConfig"
+        }
+      ]
+    },
+    "ui": {
+      "default": {
+        "theme": "cairn-dark",
+        "diff_layout": "auto",
+        "diff_side_by_side_min_width": 100,
+        "show_reasoning": "collapsed",
+        "animation": "auto",
+        "screen_reader": false,
+        "frame_rate": 60,
+        "message_width": 0,
+        "copy_on_select": false,
+        "max_transcript_lines": 5000,
+        "color": null,
+        "quiet": false
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/UiConfig"
+        }
+      ]
+    },
+    "input": {
+      "default": {
+        "submit": "enter",
+        "mode": "emacs",
+        "history_file": "",
+        "history_limit": 5000,
+        "mention_max_results": 10,
+        "paste_confirm_chars": 5000
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/InputConfig"
+        }
+      ]
+    },
+    "output": {
+      "default": {
+        "format": "text"
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/OutputConfig"
+        }
+      ]
+    },
+    "log": {
+      "default": {
+        "level": "warn",
+        "file": "",
+        "rotate_bytes": 10485760,
+        "keep_rotated": 3,
+        "redact": true
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/LogConfig"
+        }
+      ]
+    },
+    "trace": {
+      "default": {
+        "enabled": false,
+        "dir": "",
+        "redact": true,
+        "max_file_bytes": 52428800,
+        "debug_unsafe": false
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/TraceConfig"
+        }
+      ]
+    },
+    "telemetry": {
+      "default": {
+        "enabled": false,
+        "install_id": ""
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/TelemetryConfig"
+        }
+      ]
+    },
+    "update": {
+      "default": {
+        "check": true,
+        "interval_hours": 24,
+        "channel": "stable"
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/UpdateConfig"
+        }
+      ]
+    },
+    "paths": {
+      "default": {
+        "data_dir": "",
+        "cache_dir": "",
+        "config_dir": ""
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/PathsConfig"
+        }
+      ]
+    },
+    "hooks": {
+      "description": "Hook definitions (SPEC §6.7.3).",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/HookConfig"
+      }
+    },
+    "custom_tools": {
+      "description": "Custom tool definitions (SPEC §6.7.2).",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/CustomToolConfig"
+      }
+    },
+    "mcp": {
+      "default": {
+        "servers": []
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/McpConfig"
+        }
+      ]
+    },
+    "permissions": {
+      "description": "Permission *policy* (rules live in `.cairn/permissions.json`).",
+      "default": {
+        "remember_scope": "project",
+        "ask_timeout_ms": 600000,
+        "deny_ending_turn_after": 3
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionsConfig"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "Mode": {
+      "description": "The four operating modes (SPEC §7.1). Serialized as `plan`, `build`, `auto`, `auto-unsafe`.",
+      "oneOf": [
+        {
+          "description": "Read-only analysis (SPEC §7.1).",
+          "type": "string",
+          "enum": [
+            "plan"
+          ]
+        },
+        {
+          "description": "Execution with per-action approval (SPEC §7.1).",
+          "type": "string",
+          "enum": [
+            "build"
+          ]
+        },
+        {
+          "description": "Autonomous execution within guardrails (SPEC §7.1).",
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "description": "Full bypass; requires `--dangerously-skip-permissions` (SPEC §7.1, G-M1).",
+          "type": "string",
+          "enum": [
+            "auto-unsafe"
+          ]
+        }
+      ],
+      "default": "build"
+    },
+    "ProviderConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "base_url": {
+          "description": "`http`/`https` base URL.",
+          "default": "",
+          "type": "string"
+        },
+        "api_key": {
+          "description": "Inline key; prefer env/keychain (SPEC §4.10).",
+          "default": "",
+          "type": "string"
+        },
+        "max_retries": {
+          "description": "`0..=10`.",
+          "default": 5,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "idle_timeout_ms": {
+          "description": "`5000..=300000`.",
+          "default": 45000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_total_ms": {
+          "description": "`10000..=600000`.",
+          "default": 180000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "ca_bundle": {
+          "description": "Optional custom CA bundle path.",
+          "default": "",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModelOverride": {
+      "type": "object",
+      "properties": {
+        "context_window": {
+          "description": "`1024..=10_000_000`.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_output": {
+          "description": "`1..=1_000_000`.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "temperature": {
+          "description": "`0.0..=2.0`.",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellConfig": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "\"\" = auto-detect (SPEC §6.4.1).",
+          "default": "",
+          "type": "string"
+        },
+        "env_allowlist": {
+          "default": [
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "SHELL",
+            "TERM",
+            "LANG",
+            "LC_ALL",
+            "TZ",
+            "PWD",
+            "TMPDIR",
+            "COLORTERM",
+            "DISPLAY",
+            "XDG_RUNTIME_DIR",
+            "SSH_AUTH_SOCK",
+            "GOPATH",
+            "CARGO_HOME",
+            "JAVA_HOME",
+            "NODE_PATH",
+            "PYTHONPATH",
+            "VIRTUAL_ENV",
+            "CI"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inherit_cairn_env": {
+          "default": false,
+          "type": "boolean"
+        },
+        "default_timeout_ms": {
+          "description": "`1000..=600000`.",
+          "default": 120000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "kill_grace_ms": {
+          "description": "`100..=30000`.",
+          "default": 2000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "allow_pty": {
+          "default": false,
+          "type": "boolean"
+        },
+        "interactive_detection": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "command": "",
+        "env_allowlist": [
+          "PATH",
+          "HOME",
+          "USER",
+          "LOGNAME",
+          "SHELL",
+          "TERM",
+          "LANG",
+          "LC_ALL",
+          "TZ",
+          "PWD",
+          "TMPDIR",
+          "COLORTERM",
+          "DISPLAY",
+          "XDG_RUNTIME_DIR",
+          "SSH_AUTH_SOCK",
+          "GOPATH",
+          "CARGO_HOME",
+          "JAVA_HOME",
+          "NODE_PATH",
+          "PYTHONPATH",
+          "VIRTUAL_ENV",
+          "CI"
+        ],
+        "inherit_cairn_env": false,
+        "default_timeout_ms": 120000,
+        "kill_grace_ms": 2000,
+        "allow_pty": false,
+        "interactive_detection": true
+      }
+    },
+    "DiscoveryConfig": {
+      "type": "object",
+      "properties": {
+        "max_file_size_bytes": {
+          "description": "`4096..=104857600` (SPEC §5.1, REQ-CTX-003).",
+          "default": 8388608,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_entries": {
+          "description": "`1000..=10_000_000`.",
+          "default": 500000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_depth": {
+          "description": "`1..=512`.",
+          "default": 64,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "include": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "follow_symlinks": {
+          "description": "MUST stay `false` in v1 (REQ-CTX-003).",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "max_file_size_bytes": 8388608,
+        "max_entries": 500000,
+        "max_depth": 64,
+        "include": [],
+        "exclude": [],
+        "follow_symlinks": false
+      }
+    },
+    "RepoMapConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "top_k": {
+          "description": "`0..=500`.",
+          "default": 40,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_tokens": {
+          "description": "`0..=100000`.",
+          "default": 16000,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "pagerank_damping": {
+          "description": "`0.5..=0.99`.",
+          "default": 0.85,
+          "type": "number",
+          "format": "double"
+        },
+        "pagerank_iterations": {
+          "description": "`5..=100`.",
+          "default": 20,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "weights": {
+          "description": "Sums to `1.0 ± 0.001`.",
+          "default": {
+            "page": 0.55,
+            "bm25": 0.45
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Weights"
+            }
+          ]
+        },
+        "personalization": {
+          "description": "Sums to `1.0 ± 0.001`.",
+          "default": {
+            "current_file": 0.6,
+            "touched": 0.3,
+            "uniform": 0.1
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Personalization"
+            }
+          ]
+        },
+        "bm25": {
+          "description": "All values `> 0`.",
+          "default": {
+            "k1": 1.2,
+            "b": 0.75,
+            "name_boost": 3.0,
+            "path_boost": 1.5,
+            "signature_boost": 1.2,
+            "doc_boost": 1.0
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Bm25"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "enabled": true,
+        "top_k": 40,
+        "max_tokens": 16000,
+        "pagerank_damping": 0.85,
+        "pagerank_iterations": 20,
+        "weights": {
+          "page": 0.55,
+          "bm25": 0.45
+        },
+        "personalization": {
+          "current_file": 0.6,
+          "touched": 0.3,
+          "uniform": 0.1
+        },
+        "bm25": {
+          "k1": 1.2,
+          "b": 0.75,
+          "name_boost": 3.0,
+          "path_boost": 1.5,
+          "signature_boost": 1.2,
+          "doc_boost": 1.0
+        }
+      }
+    },
+    "Weights": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "default": 0.55,
+          "type": "number",
+          "format": "double"
+        },
+        "bm25": {
+          "default": 0.45,
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "page": 0.55,
+        "bm25": 0.45
+      }
+    },
+    "Personalization": {
+      "type": "object",
+      "properties": {
+        "current_file": {
+          "default": 0.6,
+          "type": "number",
+          "format": "double"
+        },
+        "touched": {
+          "default": 0.3,
+          "type": "number",
+          "format": "double"
+        },
+        "uniform": {
+          "default": 0.1,
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "current_file": 0.6,
+        "touched": 0.3,
+        "uniform": 0.1
+      }
+    },
+    "Bm25": {
+      "type": "object",
+      "properties": {
+        "k1": {
+          "default": 1.2,
+          "type": "number",
+          "format": "double"
+        },
+        "b": {
+          "default": 0.75,
+          "type": "number",
+          "format": "double"
+        },
+        "name_boost": {
+          "default": 3.0,
+          "type": "number",
+          "format": "double"
+        },
+        "path_boost": {
+          "default": 1.5,
+          "type": "number",
+          "format": "double"
+        },
+        "signature_boost": {
+          "default": 1.2,
+          "type": "number",
+          "format": "double"
+        },
+        "doc_boost": {
+          "default": 1.0,
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "k1": 1.2,
+        "b": 0.75,
+        "name_boost": 3.0,
+        "path_boost": 1.5,
+        "signature_boost": 1.2,
+        "doc_boost": 1.0
+      }
+    },
+    "IndexConfig": {
+      "type": "object",
+      "properties": {
+        "debounce_ms": {
+          "description": "`50..=10000`.",
+          "default": 300,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "watch": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_age_days": {
+          "description": "`1..=365`.",
+          "default": 30,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "db_path": {
+          "description": "\"\" = derived under the cache dir (SPEC §5.3).",
+          "default": "",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "debounce_ms": 300,
+        "watch": true,
+        "max_age_days": 30,
+        "db_path": ""
+      }
+    },
+    "ContextConfig": {
+      "type": "object",
+      "properties": {
+        "history_budget_pct": {
+          "description": "`1..=95`.",
+          "default": 55,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "system_prompt_pct": {
+          "description": "`1..=40`.",
+          "default": 8,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "tools_pct": {
+          "description": "`1..=40`.",
+          "default": 6,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "repo_map_pct": {
+          "description": "`0..=50`.",
+          "default": 10,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "pinned_pct": {
+          "description": "`0..=50`.",
+          "default": 15,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "output_reserve_pct": {
+          "description": "`5..=40` (REQ-CTX-010).",
+          "default": 12,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "tool_output_max_bytes": {
+          "description": "`256..=1048576`.",
+          "default": 8192,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "compaction_threshold": {
+          "description": "`0.5..=0.95`.",
+          "default": 0.8,
+          "type": "number",
+          "format": "double"
+        },
+        "compaction_max_attempts": {
+          "description": "`1..=10`.",
+          "default": 3,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "compaction_keep_messages": {
+          "description": "`0..=100`.",
+          "default": 12,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "history_keep_compactions": {
+          "description": "`1..=20` (REQ-CTX-015 `/undo` depth).",
+          "default": 5,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "history_budget_pct": 55,
+        "system_prompt_pct": 8,
+        "tools_pct": 6,
+        "repo_map_pct": 10,
+        "pinned_pct": 15,
+        "output_reserve_pct": 12,
+        "tool_output_max_bytes": 8192,
+        "compaction_threshold": 0.8,
+        "compaction_max_attempts": 3,
+        "compaction_keep_messages": 12,
+        "history_keep_compactions": 5
+      }
+    },
+    "AutoConfig": {
+      "type": "object",
+      "properties": {
+        "max_iterations": {
+          "description": "`1..=1000`.",
+          "default": 40,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_tool_calls": {
+          "description": "`1..=10000`.",
+          "default": 120,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_wall_ms": {
+          "description": "`10000..=3600000`.",
+          "default": 600000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_cost_usd": {
+          "description": "`0.01..=1000`.",
+          "default": 2.0,
+          "type": "number",
+          "format": "double"
+        },
+        "max_files_changed": {
+          "description": "`1..=10000`.",
+          "default": 40,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_consecutive_failures": {
+          "description": "`1..=100`.",
+          "default": 5,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "loop_detection": {
+          "default": true,
+          "type": "boolean"
+        },
+        "allow_commit": {
+          "description": "Auto-allows `git_commit` in `auto` (SPEC §7.2).",
+          "default": false,
+          "type": "boolean"
+        },
+        "allow_network": {
+          "default": true,
+          "type": "boolean"
+        },
+        "allow_pty": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "max_iterations": 40,
+        "max_tool_calls": 120,
+        "max_wall_ms": 600000,
+        "max_cost_usd": 2.0,
+        "max_files_changed": 40,
+        "max_consecutive_failures": 5,
+        "loop_detection": true,
+        "allow_commit": false,
+        "allow_network": true,
+        "allow_pty": false
+      }
+    },
+    "SessionConfig": {
+      "type": "object",
+      "properties": {
+        "max_cost_usd": {
+          "description": "`0.01..=100000`.",
+          "default": 20.0,
+          "type": "number",
+          "format": "double"
+        },
+        "max_tool_calls": {
+          "description": "`1..=1000000`.",
+          "default": 3000,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "retention_days": {
+          "description": "`1..=3650`.",
+          "default": 90,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_sessions": {
+          "description": "`10..=100000`.",
+          "default": 500,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "auto_recover": {
+          "description": "Auto-recover an interrupted turn (SPEC §8.7).",
+          "default": false,
+          "type": "boolean"
+        },
+        "kill_jobs_on_exit": {
+          "description": "Kill background jobs at exit (SPEC §6.4.7).",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "max_cost_usd": 20.0,
+        "max_tool_calls": 3000,
+        "retention_days": 90,
+        "max_sessions": 500,
+        "auto_recover": false,
+        "kill_jobs_on_exit": false
+      }
+    },
+    "CheckpointConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "per_tool": {
+          "description": "Checkpoint before every mutating tool (SPEC §9.8).",
+          "default": false,
+          "type": "boolean"
+        },
+        "keep_per_session": {
+          "description": "`1..=1000`.",
+          "default": 50,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "keep_total": {
+          "description": "`1..=10000`.",
+          "default": 200,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_total_bytes": {
+          "description": "`67108864..=68719476736` (64 MiB .. 64 GiB).",
+          "default": 1073741824,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "fast_path_max_files": {
+          "description": "`10..=100000` (REQ-SAFE-017).",
+          "default": 1000,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "enabled": true,
+        "per_tool": false,
+        "keep_per_session": 50,
+        "keep_total": 200,
+        "max_total_bytes": 1073741824,
+        "fast_path_max_files": 1000
+      }
+    },
+    "SecurityConfig": {
+      "type": "object",
+      "properties": {
+        "sandbox": {
+          "default": "auto",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SandboxLevel"
+            }
+          ]
+        },
+        "allow_unsafe_shell": {
+          "description": "SPEC §9.3.1 bypass — gated by `--dangerously-skip-permissions`.",
+          "default": false,
+          "type": "boolean"
+        },
+        "allow_protected_paths": {
+          "description": "Glob patterns that opt paths out of the protected-path set (SPEC §9.4).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "additional_dirs": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "additional_dirs_writable": {
+          "default": false,
+          "type": "boolean"
+        },
+        "redact_patterns": {
+          "description": "Extra redaction regexes (REQ-SAFE-011).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "share_permissions": {
+          "description": "Commit `.cairn/permissions.json` (REQ-SAFE-003).",
+          "default": false,
+          "type": "boolean"
+        },
+        "load_grammar_plugins": {
+          "description": "Load grammar plugins (REQ-TOOL-028).",
+          "default": true,
+          "type": "boolean"
+        },
+        "verify_untrusted_html": {
+          "description": "Adds an untrusted-content warning header to `web_fetch` output.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "sandbox": "auto",
+        "allow_unsafe_shell": false,
+        "allow_protected_paths": [],
+        "additional_dirs": [],
+        "additional_dirs_writable": false,
+        "redact_patterns": [],
+        "share_permissions": false,
+        "load_grammar_plugins": true,
+        "verify_untrusted_html": false
+      }
+    },
+    "SandboxLevel": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "full",
+        "advisory",
+        "none"
+      ],
+      "default": "auto"
+    },
+    "NetworkConfig": {
+      "type": "object",
+      "properties": {
+        "offline": {
+          "default": false,
+          "type": "boolean"
+        },
+        "allow_hosts": {
+          "description": "Hosts or `*.suffix`; empty = any host (subject to rules).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "proxy": {
+          "description": "Overrides `HTTP(S)_PROXY`.",
+          "default": "",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "`1000..=300000` (`web_fetch` default).",
+          "default": 30000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "offline": false,
+        "allow_hosts": [],
+        "proxy": "",
+        "timeout_ms": 30000
+      }
+    },
+    "PlansConfig": {
+      "type": "object",
+      "properties": {
+        "shareable": {
+          "description": "Write plans to a shareable file (SPEC §7.3).",
+          "default": false,
+          "type": "boolean"
+        },
+        "editor": {
+          "default": "internal",
+          "allOf": [
+            {
+              "$ref": "#/definitions/EditorKind"
+            }
+          ]
+        },
+        "auto_approve": {
+          "description": "Auto-approve produced plans in headless runs (REQ-MODE-007).",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "shareable": false,
+        "editor": "internal",
+        "auto_approve": false
+      }
+    },
+    "EditorKind": {
+      "type": "string",
+      "enum": [
+        "internal",
+        "external"
+      ],
+      "default": "internal"
+    },
+    "ModesConfig": {
+      "type": "object",
+      "properties": {
+        "allow_unsafe": {
+          "description": "Enables `mode = \"auto-unsafe\"` (G-M1). Set by `--dangerously-skip-permissions` only.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "allow_unsafe": false
+      }
+    },
+    "SubagentConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_parallel": {
+          "description": "`1..=16`.",
+          "default": 4,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_depth": {
+          "description": "`1..=3` (REQ-LOOP-009 fixes the effective maximum at 2).",
+          "default": 2,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "inherit_unsafe": {
+          "description": "Subagents never inherit `auto-unsafe` unless this is true (SPEC §8.8).",
+          "default": false,
+          "type": "boolean"
+        },
+        "timeout_ms": {
+          "description": "`10000..=3600000`.",
+          "default": 600000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "enabled": true,
+        "max_parallel": 4,
+        "max_depth": 2,
+        "inherit_unsafe": false,
+        "timeout_ms": 600000
+      }
+    },
+    "VerifyConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "commands": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_attempts": {
+          "description": "`1..=10`.",
+          "default": 3,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "timeout_ms": {
+          "description": "`1000..=1800000`.",
+          "default": 300000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "enabled": true,
+        "commands": [],
+        "max_attempts": 3,
+        "timeout_ms": 300000
+      }
+    },
+    "TodoConfig": {
+      "description": "Reserved section with no keys (SPEC §11.4.1 `[todo]`).",
+      "type": "object",
+      "additionalProperties": false,
+      "default": {}
+    },
+    "UiConfig": {
+      "type": "object",
+      "properties": {
+        "theme": {
+          "description": "Built-in: `cairn-dark`, `cairn-light`, `high-contrast` (SPEC §10.4).",
+          "default": "cairn-dark",
+          "type": "string"
+        },
+        "diff_layout": {
+          "default": "auto",
+          "allOf": [
+            {
+              "$ref": "#/definitions/DiffLayout"
+            }
+          ]
+        },
+        "diff_side_by_side_min_width": {
+          "description": "`40..=400`.",
+          "default": 100,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "show_reasoning": {
+          "default": "collapsed",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ShowReasoning"
+            }
+          ]
+        },
+        "animation": {
+          "default": "auto",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Animation"
+            }
+          ]
+        },
+        "screen_reader": {
+          "default": false,
+          "type": "boolean"
+        },
+        "frame_rate": {
+          "description": "`10..=240`.",
+          "default": 60,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "message_width": {
+          "description": "`0` = full width, else wrap column.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "copy_on_select": {
+          "default": false,
+          "type": "boolean"
+        },
+        "max_transcript_lines": {
+          "description": "`100..=100000`.",
+          "default": 5000,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "color": {
+          "description": "`None` = auto-detect (color when TTY); set by `--no-color` / `NO_COLOR`.",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "quiet": {
+          "description": "Set by `-q` / `CAIRN_QUIET`.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "theme": "cairn-dark",
+        "diff_layout": "auto",
+        "diff_side_by_side_min_width": 100,
+        "show_reasoning": "collapsed",
+        "animation": "auto",
+        "screen_reader": false,
+        "frame_rate": 60,
+        "message_width": 0,
+        "copy_on_select": false,
+        "max_transcript_lines": 5000,
+        "color": null,
+        "quiet": false
+      }
+    },
+    "DiffLayout": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "inline",
+        "side"
+      ],
+      "default": "auto"
+    },
+    "ShowReasoning": {
+      "type": "string",
+      "enum": [
+        "always",
+        "collapsed",
+        "never"
+      ],
+      "default": "collapsed"
+    },
+    "Animation": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "default": "auto"
+    },
+    "InputConfig": {
+      "type": "object",
+      "properties": {
+        "submit": {
+          "default": "enter",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubmitKey"
+            }
+          ]
+        },
+        "mode": {
+          "default": "emacs",
+          "allOf": [
+            {
+              "$ref": "#/definitions/EditorMode"
+            }
+          ]
+        },
+        "history_file": {
+          "description": "\"\" = derived (SPEC §10.2).",
+          "default": "",
+          "type": "string"
+        },
+        "history_limit": {
+          "description": "`100..=100000`.",
+          "default": 5000,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "mention_max_results": {
+          "description": "`1..=100`.",
+          "default": 10,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "paste_confirm_chars": {
+          "description": "`0..=1000000`.",
+          "default": 5000,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "submit": "enter",
+        "mode": "emacs",
+        "history_file": "",
+        "history_limit": 5000,
+        "mention_max_results": 10,
+        "paste_confirm_chars": 5000
+      }
+    },
+    "SubmitKey": {
+      "type": "string",
+      "enum": [
+        "enter",
+        "ctrl_enter"
+      ],
+      "default": "enter"
+    },
+    "EditorMode": {
+      "type": "string",
+      "enum": [
+        "emacs",
+        "vi"
+      ],
+      "default": "emacs"
+    },
+    "OutputConfig": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "description": "`tui` is only usable on a TTY.",
+          "default": "text",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OutputFormat"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "format": "text"
+      }
+    },
+    "OutputFormat": {
+      "type": "string",
+      "enum": [
+        "text",
+        "json",
+        "stream-json",
+        "tui"
+      ],
+      "default": "text"
+    },
+    "LogConfig": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "default": "warn",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LogLevel"
+            }
+          ]
+        },
+        "file": {
+          "description": "\"\" = XDG state log path (SPEC §11.5).",
+          "default": "",
+          "type": "string"
+        },
+        "rotate_bytes": {
+          "description": "`1048576..=1073741824`.",
+          "default": 10485760,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "keep_rotated": {
+          "description": "`1..=100`.",
+          "default": 3,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "redact": {
+          "description": "Must stay `true` unless `trace.debug_unsafe = true` (SPEC §12.1).",
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "level": "warn",
+        "file": "",
+        "rotate_bytes": 10485760,
+        "keep_rotated": 3,
+        "redact": true
+      }
+    },
+    "LogLevel": {
+      "type": "string",
+      "enum": [
+        "error",
+        "warn",
+        "info",
+        "debug",
+        "trace"
+      ],
+      "default": "warn"
+    },
+    "TraceConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dir": {
+          "description": "\"\" = `<cache>/trace`.",
+          "default": "",
+          "type": "string"
+        },
+        "redact": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_file_bytes": {
+          "description": "`1048576..=1073741824`.",
+          "default": 52428800,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "debug_unsafe": {
+          "description": "Allows `log.redact = false` (SPEC §12.1 `E-CFG-UNSAFEREDACT`).",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "enabled": false,
+        "dir": "",
+        "redact": true,
+        "max_file_bytes": 52428800,
+        "debug_unsafe": false
+      }
+    },
+    "TelemetryConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Opt-in only (SPEC §12.2).",
+          "default": false,
+          "type": "boolean"
+        },
+        "install_id": {
+          "description": "Anonymous install id; `\"\"` regenerates.",
+          "default": "",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "enabled": false,
+        "install_id": ""
+      }
+    },
+    "UpdateConfig": {
+      "type": "object",
+      "properties": {
+        "check": {
+          "default": true,
+          "type": "boolean"
+        },
+        "interval_hours": {
+          "description": "`1..=720`.",
+          "default": 24,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "channel": {
+          "default": "stable",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UpdateChannel"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "check": true,
+        "interval_hours": 24,
+        "channel": "stable"
+      }
+    },
+    "UpdateChannel": {
+      "type": "string",
+      "enum": [
+        "stable",
+        "beta"
+      ],
+      "default": "stable"
+    },
+    "PathsConfig": {
+      "description": "XDG path overrides (\"\" = derived, SPEC §11.6).",
+      "type": "object",
+      "properties": {
+        "data_dir": {
+          "default": "",
+          "type": "string"
+        },
+        "cache_dir": {
+          "default": "",
+          "type": "string"
+        },
+        "config_dir": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "data_dir": "",
+        "cache_dir": "",
+        "config_dir": ""
+      }
+    },
+    "HookConfig": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HookEvent"
+          }
+        },
+        "command": {
+          "description": "Executable path (SPEC §6.7.3).",
+          "default": "",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "`1..=600000`.",
+          "default": 2000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "fail_mode": {
+          "default": "warn",
+          "allOf": [
+            {
+              "$ref": "#/definitions/FailMode"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HookEvent": {
+      "description": "Hook trigger events (SPEC §6.7.3).",
+      "type": "string",
+      "enum": [
+        "pre_tool",
+        "post_tool",
+        "on_session_start",
+        "on_session_end",
+        "pre_model",
+        "post_model",
+        "on_permission_request",
+        "on_compaction",
+        "on_error"
+      ]
+    },
+    "FailMode": {
+      "type": "string",
+      "enum": [
+        "warn",
+        "block",
+        "ignore"
+      ]
+    },
+    "CustomToolConfig": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "`^[a-z][a-z0-9_]{1,63}$`, must not collide with built-ins (SPEC §6.7.2).",
+          "default": "",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "type": "string"
+        },
+        "command": {
+          "default": "",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "`1..=3600000`.",
+          "default": 300000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "permission_class": {
+          "default": "execute",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionClass"
+            }
+          ]
+        },
+        "input_schema": {
+          "description": "Optional JSON Schema for the tool input.",
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "PermissionClass": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write",
+        "execute",
+        "network",
+        "ask"
+      ]
+    },
+    "McpConfig": {
+      "type": "object",
+      "properties": {
+        "servers": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/McpServer"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "servers": []
+      }
+    },
+    "McpServer": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "default": "",
+          "type": "string"
+        },
+        "transport": {
+          "default": "stdio",
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpTransport"
+            }
+          ]
+        },
+        "command": {
+          "description": "stdio transport: executable.",
+          "default": "",
+          "type": "string"
+        },
+        "args": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "description": "`${VAR}` expanded from env only (SPEC §6.7.1).",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "url": {
+          "description": "http transport: endpoint.",
+          "default": "",
+          "type": "string"
+        },
+        "headers": {
+          "description": "http transport: request headers.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "description": "Working directory for stdio servers.",
+          "default": "",
+          "type": "string"
+        },
+        "request_timeout_ms": {
+          "description": "`1000..=300000`.",
+          "default": 15000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "tools_allow": {
+          "default": [
+            "*"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools_deny": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpTransport": {
+      "type": "string",
+      "enum": [
+        "stdio",
+        "http"
+      ]
+    },
+    "PermissionsConfig": {
+      "type": "object",
+      "properties": {
+        "remember_scope": {
+          "default": "project",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RememberScope"
+            }
+          ]
+        },
+        "ask_timeout_ms": {
+          "description": "`10000..=3600000` (SPEC §8.1).",
+          "default": 600000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "deny_ending_turn_after": {
+          "description": "`1..=20` (SPEC §8.3 T-5).",
+          "default": 3,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "remember_scope": "project",
+        "ask_timeout_ms": 600000,
+        "deny_ending_turn_after": 3
+      }
+    },
+    "RememberScope": {
+      "type": "string",
+      "enum": [
+        "session",
+        "project",
+        "user"
+      ],
+      "default": "project"
+    }
+  },
+  "x-cli-flags": [
+    {
+      "x-flag": "--workspace",
+      "x-env-var": "CAIRN_WORKSPACE",
+      "x-config-key": "",
+      "default": "git root or CWD",
+      "description": "workspace root",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "-m, --model",
+      "x-env-var": "CAIRN_MODEL",
+      "x-config-key": "model",
+      "default": "anthropic/claude-sonnet-4-5",
+      "description": "model id",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--mode",
+      "x-env-var": "CAIRN_MODE",
+      "x-config-key": "mode",
+      "default": "build",
+      "description": "operating mode",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "-c, --config",
+      "x-env-var": "CAIRN_CONFIG",
+      "x-config-key": "",
+      "default": "",
+      "description": "additional config file (highest config precedence)",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--profile",
+      "x-env-var": "CAIRN_PROFILE",
+      "x-config-key": "profile",
+      "default": "default",
+      "description": "config profile selector",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--output",
+      "x-env-var": "CAIRN_OUTPUT",
+      "x-config-key": "output.format",
+      "default": "text if not TTY, else tui",
+      "description": "output format",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--no-color",
+      "x-env-var": "NO_COLOR",
+      "x-config-key": "ui.color",
+      "default": "color if TTY",
+      "description": "disable ANSI",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--log-level",
+      "x-env-var": "CAIRN_LOG_LEVEL",
+      "x-config-key": "log.level",
+      "default": "warn",
+      "description": "log verbosity",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--log-file",
+      "x-env-var": "CAIRN_LOG_FILE",
+      "x-config-key": "log.file",
+      "default": "~/.local/share/cairn/logs/cairn.log",
+      "description": "log destination",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--trace",
+      "x-env-var": "CAIRN_TRACE",
+      "x-config-key": "trace.enabled",
+      "default": "false",
+      "description": "record full model I/O",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--dangerously-skip-permissions",
+      "x-env-var": "",
+      "x-config-key": "modes.allow_unsafe",
+      "default": "false",
+      "description": "enables auto-unsafe (G-M1)",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--no-update-check",
+      "x-env-var": "CAIRN_NO_UPDATE_CHECK",
+      "x-config-key": "update.check",
+      "default": "false",
+      "description": "skip background update check",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--offline",
+      "x-env-var": "CAIRN_OFFLINE",
+      "x-config-key": "network.offline",
+      "default": "false",
+      "description": "no network; provider calls fail fast",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "-q, --quiet",
+      "x-env-var": "CAIRN_QUIET",
+      "x-config-key": "ui.quiet",
+      "default": "false",
+      "description": "suppress progress on stderr",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "-v, --verbose",
+      "x-env-var": "CAIRN_VERBOSE",
+      "x-config-key": "",
+      "default": "false",
+      "description": "-v info, -vv debug, -vvv trace",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--version",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "",
+      "description": "print version and exit 0",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "-h, --help",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "",
+      "description": "help for command, exit 0",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "-p, --prompt",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "",
+      "description": "prompt text",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--prompt-file",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "",
+      "description": "read prompt from file (- = stdin)",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--stdin",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "false",
+      "description": "read prompt from stdin",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--input",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "",
+      "description": "JSONL transcript to preload",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--session",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "new session",
+      "description": "continue an existing session",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--approve-plan",
+      "x-env-var": "",
+      "x-config-key": "plans.auto_approve",
+      "default": "false",
+      "description": "auto-approve a produced plan (headless)",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--max-iterations",
+      "x-env-var": "CAIRN_MAX_ITERATIONS",
+      "x-config-key": "auto.max_iterations",
+      "default": "per mode",
+      "description": "override loop cap",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--allow-ask",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "false",
+      "description": "read approval answers from stdin as JSON lines",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--input-fmt",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "text",
+      "description": "format of --input",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--tee",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "false",
+      "description": "also print progress to stderr",
+      "x-scope": "run"
+    },
+    {
+      "x-flag": "--json-schema",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "",
+      "description": "print the JSON Schema of config.toml",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--effective",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "",
+      "description": "annotate each key with its winning layer",
+      "x-scope": "global"
+    },
+    {
+      "x-flag": "--allow-unknown-keys",
+      "x-env-var": "",
+      "x-config-key": "",
+      "default": "false",
+      "description": "downgrade E-CFG-UNKNOWN to a warning",
+      "x-scope": "global"
+    }
+  ],
+  "x-env-var-map": [
+    {
+      "env": "CAIRN_MODEL",
+      "config_key": "model"
+    },
+    {
+      "env": "CAIRN_MODE",
+      "config_key": "mode"
+    },
+    {
+      "env": "CAIRN_PROFILE",
+      "config_key": "profile"
+    },
+    {
+      "env": "CAIRN_OUTPUT",
+      "config_key": "output.format"
+    },
+    {
+      "env": "CAIRN_LOG_LEVEL",
+      "config_key": "log.level"
+    },
+    {
+      "env": "CAIRN_LOG_FILE",
+      "config_key": "log.file"
+    },
+    {
+      "env": "CAIRN_TRACE",
+      "config_key": "trace.enabled"
+    },
+    {
+      "env": "CAIRN_OFFLINE",
+      "config_key": "network.offline"
+    },
+    {
+      "env": "CAIRN_QUIET",
+      "config_key": "ui.quiet"
+    },
+    {
+      "env": "CAIRN_SCREEN_READER",
+      "config_key": "ui.screen_reader"
+    },
+    {
+      "env": "CAIRN_SHELL",
+      "config_key": "shell.command"
+    },
+    {
+      "env": "CAIRN_MAX_ITERATIONS",
+      "config_key": "auto.max_iterations"
+    },
+    {
+      "env": "CAIRN_NO_UPDATE_CHECK",
+      "config_key": "update.check"
+    },
+    {
+      "env": "CAIRN_VERIFY_COMMANDS",
+      "config_key": "verify.commands"
+    },
+    {
+      "env": "CAIRN_CACHE_DIR",
+      "config_key": "paths.cache_dir"
+    },
+    {
+      "env": "CAIRN_DATA_DIR",
+      "config_key": "paths.data_dir"
+    }
+  ]
+}

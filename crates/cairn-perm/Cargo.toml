@@ -1,0 +1,13 @@
+[package]
+name = "cairn-perm"
+description = "Permission engine: ruleset AST, scopes, interception (SPEC 9, D-06)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+[lints]
+workspace = true

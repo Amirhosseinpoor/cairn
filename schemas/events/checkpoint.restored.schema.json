@@ -1,0 +1,358 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "checkpoint.restored",
+  "description": "One Cairn envelope event, narrowed to `checkpoint.restored` (SPEC §3.5).",
+  "type": "object",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "data",
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "checkpoint.restored"
+          ]
+        },
+        "data": {
+          "type": "object",
+          "required": [
+            "checkpoint_id",
+            "files",
+            "policy"
+          ],
+          "properties": {
+            "checkpoint_id": {
+              "type": "string"
+            },
+            "policy": {
+              "type": "string"
+            },
+            "files": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        }
+      }
+    }
+  ],
+  "required": [
+    "seq",
+    "ts",
+    "v"
+  ],
+  "properties": {
+    "v": {
+      "description": "Envelope schema version, `1` for Cairn 1.x.",
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0.0
+    },
+    "seq": {
+      "description": "Monotonic per-bus sequence number.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "ts": {
+      "description": "RFC3339 timestamp with milliseconds.",
+      "type": "string"
+    },
+    "session": {
+      "description": "Session the event belongs to, when known.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "definitions": {
+    "TurnStatus": {
+      "description": "`turn.ended` status values (SPEC §3.5, §8.3).",
+      "type": "string",
+      "enum": [
+        "ok",
+        "error",
+        "cancelled",
+        "guardrail",
+        "denied"
+      ]
+    },
+    "Message": {
+      "description": "A message (SPEC §4.1).",
+      "type": "object",
+      "required": [
+        "blocks",
+        "created_at",
+        "id",
+        "role",
+        "turn_id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Block"
+          }
+        },
+        "created_at": {
+          "description": "RFC3339 timestamp; schema expresses it as a string (SPEC §3.5 style).",
+          "type": "string"
+        },
+        "usage": {
+          "description": "Set for assistant messages only.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn_id": {
+          "description": "Turn that produced the message.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "Role": {
+      "description": "Message roles (SPEC §4.1).",
+      "type": "string",
+      "enum": [
+        "system",
+        "user",
+        "assistant",
+        "tool"
+      ]
+    },
+    "Block": {
+      "description": "Content blocks (SPEC §4.1).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "text"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "text"
+              ]
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "text"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "reasoning"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "signature": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data_b64",
+            "kind",
+            "media_type"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            },
+            "media_type": {
+              "$ref": "#/definitions/MediaType"
+            },
+            "data_b64": {
+              "type": "string"
+            },
+            "alt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "input",
+            "kind",
+            "name",
+            "partial"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "tool_call"
+              ]
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "input": true,
+            "partial": {
+              "description": "`true` while the provider stream is still assembling `input`.",
+              "type": "boolean"
+            },
+            "parse_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "content",
+            "is_error",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "tool_result"
+              ]
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "content": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Block"
+              }
+            },
+            "is_error": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "text"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "thinking_placeholder"
+              ]
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "MediaType": {
+      "description": "Image media types accepted by the vision path (SPEC §4.1).",
+      "type": "string",
+      "enum": [
+        "png",
+        "jpeg",
+        "gif",
+        "webp"
+      ]
+    },
+    "Usage": {
+      "description": "Token usage attached to assistant messages (SPEC §4.1).",
+      "type": "object",
+      "required": [
+        "cache_read",
+        "cache_write",
+        "estimated",
+        "input",
+        "output"
+      ],
+      "properties": {
+        "input": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "output": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "cache_read": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "cache_write": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "estimated": {
+          "description": "`false` once the provider reported real numbers (REQ-PROV-011).",
+          "type": "boolean"
+        }
+      }
+    },
+    "ToolStatus": {
+      "description": "`tool.finished` status values (SPEC §3.5).",
+      "type": "string",
+      "enum": [
+        "ok",
+        "error",
+        "denied",
+        "timeout",
+        "cancelled"
+      ]
+    }
+  }
+}

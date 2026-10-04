@@ -1,0 +1,13 @@
+[package]
+name = "cairn-sse"
+description = "Hand-written SSE parser + JSONL fallback (SPEC 4.4, D-04)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+[lints]
+workspace = true

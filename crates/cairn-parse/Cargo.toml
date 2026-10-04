@@ -1,0 +1,13 @@
+[package]
+name = "cairn-parse"
+description = "Tool-call argument parsers: JSON, RFC 8259, pretty/compact diff (SPEC 4.3)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+[lints]
+workspace = true

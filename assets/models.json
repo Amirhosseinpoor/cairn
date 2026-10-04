@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": 1,
+  "updated_at": "2026-10-03T00:00:00Z",
+  "providers": {
+    "anthropic": {
+      "kind": "anthropic",
+      "base_url": "https://api.anthropic.com",
+      "auth_header": "x-api-key",
+      "env_key": "ANTHROPIC_API_KEY"
+    },
+    "openai": {
+      "kind": "openai",
+      "base_url": "https://api.openai.com",
+      "auth_header": "Authorization: Bearer",
+      "env_key": "OPENAI_API_KEY"
+    },
+    "ollama": {
+      "kind": "ollama",
+      "base_url": "http://127.0.0.1:11434",
+      "auth_header": "Authorization: Bearer"
+    },
+    "vllm": {
+      "kind": "vllm",
+      "base_url": "http://127.0.0.1:8000",
+      "auth_header": "Authorization: Bearer"
+    }
+  },
+  "models": {
+    "anthropic/claude-sonnet-4-5": {
+      "provider": "anthropic",
+      "display_name": "Claude Sonnet 4.5",
+      "context_window": 200000,
+      "max_output": 64000,
+      "capabilities": {
+        "tool_calling": true,
+        "streaming": true,
+        "reasoning": true,
+        "prompt_cache": true,
+        "vision": true,
+        "parallel_tool_calls": true,
+        "json_schema_strict": false
+      },
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.3,
+        "cache_write_per_mtok": 3.75
+      },
+      "tokenizer": "unknown",
+      "aliases": ["sonnet", "claude-sonnet"]
+    },
+    "openai/gpt-5.1-codex": {
+      "provider": "openai",
+      "display_name": "GPT-5.1 Codex",
+      "context_window": 400000,
+      "max_output": 128000,
+      "capabilities": {
+        "tool_calling": true,
+        "streaming": true,
+        "reasoning": true,
+        "prompt_cache": true,
+        "vision": false,
+        "parallel_tool_calls": true,
+        "json_schema_strict": true
+      },
+      "pricing": {
+        "input_per_mtok": null,
+        "output_per_mtok": null
+      },
+      "tokenizer": "o200k_base",
+      "aliases": ["codex", "gpt-5.1-codex"]
+    },
+    "openai/o4-mini": {
+      "provider": "openai",
+      "display_name": "o4-mini",
+      "context_window": 200000,
+      "max_output": 100000,
+      "capabilities": {
+        "tool_calling": true,
+        "streaming": true,
+        "reasoning": true,
+        "prompt_cache": true,
+        "vision": true,
+        "parallel_tool_calls": true,
+        "json_schema_strict": true
+      },
+      "pricing": {
+        "input_per_mtok": null,
+        "output_per_mtok": null
+      },
+      "tokenizer": "o200k_base",
+      "aliases": ["o4-mini"]
+    },
+    "ollama/qwen2.5-coder:14b": {
+      "provider": "ollama",
+      "display_name": "Qwen2.5 Coder 14B (local)",
+      "context_window": 131072,
+      "max_output": 8192,
+      "capabilities": {
+        "tool_calling": true,
+        "streaming": true,
+        "reasoning": false,
+        "prompt_cache": false,
+        "vision": false,
+        "parallel_tool_calls": false,
+        "json_schema_strict": false
+      },
+      "pricing": {
+        "input_per_mtok": 0.0,
+        "output_per_mtok": 0.0
+      },
+      "tokenizer": "unknown",
+      "aliases": ["qwen2.5-coder", "local"]
+    },
+    "vllm/qwen2.5-coder-7b-instruct": {
+      "provider": "vllm",
+      "display_name": "Qwen2.5 Coder 7B Instruct (vLLM)",
+      "context_window": 32768,
+      "max_output": 8192,
+      "capabilities": {
+        "tool_calling": false,
+        "streaming": true,
+        "reasoning": false,
+        "prompt_cache": false,
+        "vision": false,
+        "parallel_tool_calls": false,
+        "json_schema_strict": false
+      },
+      "pricing": {
+        "input_per_mtok": 0.0,
+        "output_per_mtok": 0.0
+      },
+      "tokenizer": "unknown",
+      "aliases": ["vllm"]
+    }
+  }
+}

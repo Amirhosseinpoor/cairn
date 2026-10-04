@@ -1,0 +1,22 @@
+[package]
+name = "cairn-core"
+description = "Domain types, stable error codes, event envelopes, ids, modes, secret redaction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+regex.workspace = true
+getrandom.workspace = true
+schemars.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "cairn-context"
+description = "Context engine: repo map, tool feedback, compaction (SPEC 5)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+[lints]
+workspace = true

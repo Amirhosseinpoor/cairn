@@ -1,0 +1,13 @@
+[package]
+name = "cairn-git"
+description = "Git integration: shadow refs, diffs, commit, history probes (SPEC 5.11, 9.8)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-core.workspace = true
+
+[lints]
+workspace = true

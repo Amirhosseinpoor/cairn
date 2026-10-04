@@ -1,0 +1,5 @@
+# SPEC §15.3 — "rustfmt defaults + 100-col max_width".
+#
+# `max_width` is rustfmt's default, spelled out so a future edit that lowers it
+# shows up as a diff in this file rather than silently reformatting the tree.
+max_width = 100
