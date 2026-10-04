@@ -30,8 +30,8 @@ pub use shutdown::{shutdown_with_flush, FLUSH_BUDGET};
 pub const CODE_AREAS: &[&str] = &[
     "ARCH", "ASK", "AUTH", "CFG", "CHK", "CLI", "CRED", "CTX", "DISC", "EDIT", "FS", "GIT", "GLOB",
     "GREP", "HOOK", "IDX", "IMPL", "INJ", "JOB", "LOOP", "MCP", "MODE", "OPS", "ORPHAN", "PARSE",
-    "PERF", "PERM", "PLAN", "PROD", "PROV", "REGEX", "SAFE", "SANDBOX", "SESS", "SHELL", "STATE",
-    "SUB", "TECH", "TODO", "TOOL", "TUI", "UPDATE", "WEB",
+    "PERF", "PERM", "PLAN", "PROD", "PROV", "REG", "REGEX", "SAFE", "SANDBOX", "SESS", "SHELL",
+    "STATE", "SUB", "TECH", "TODO", "TOOL", "TUI", "UPDATE", "WEB",
 ];
 
 #[cfg(test)]

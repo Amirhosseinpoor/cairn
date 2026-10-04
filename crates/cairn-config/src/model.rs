@@ -45,6 +45,7 @@ pub struct Config {
     pub context: ContextConfig,
     pub auto: AutoConfig,
     pub session: SessionConfig,
+    pub migrate: MigrateConfig,
     pub checkpoint: CheckpointConfig,
     pub security: SecurityConfig,
     pub network: NetworkConfig,
@@ -101,6 +102,7 @@ impl Default for Config {
             context: ContextConfig::default(),
             auto: AutoConfig::default(),
             session: SessionConfig::default(),
+            migrate: MigrateConfig::default(),
             checkpoint: CheckpointConfig::default(),
             security: SecurityConfig::default(),
             network: NetworkConfig::default(),
@@ -629,6 +631,20 @@ impl Default for SessionConfig {
             auto_recover: false,
             kill_jobs_on_exit: false,
         }
+    }
+}
+
+/// `[migrate]` (SPEC §11.4.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct MigrateConfig {
+    /// Rewrite an older session on resume, before it is read (SPEC §11.7).
+    pub auto: bool,
+}
+
+impl Default for MigrateConfig {
+    fn default() -> Self {
+        Self { auto: true }
     }
 }
 

@@ -202,6 +202,7 @@ pub mod codes {
     pub const EDIT_STALE: &str = "E-EDIT-STALE";
     pub const EDIT_SYNTAX: &str = "E-EDIT-SYNTAX";
     pub const EDIT_FUZZY: &str = "W-EDIT-FUZZY";
+    pub const EDIT_TIMEOUT: &str = "W-EDIT-TIMEOUT";
 
     // --- FS ---
     pub const FS_BADPATH: &str = "E-FS-BADPATH";
@@ -315,6 +316,9 @@ pub mod codes {
     pub const PROV_TIMEOUT: &str = "E-PROV-TIMEOUT";
     pub const PROV_TLS: &str = "E-PROV-TLS";
 
+    // --- REG (model registry, §4.9) ---
+    pub const REG_FALLBACK: &str = "W-REG-FALLBACK";
+
     // --- REGEX ---
     pub const REGEX_SYNTAX: &str = "E-REGEX-SYNTAX";
     pub const REGEX_TOOBIG: &str = "E-REGEX-TOOBIG";
@@ -324,6 +328,8 @@ pub mod codes {
     pub const SANDBOX_ADVISORY: &str = "W-SANDBOX-ADVISORY";
 
     // --- SESS ---
+    pub const SESS_CORRUPT: &str = "E-SESS-CORRUPT";
+    pub const SESS_FLUSH: &str = "E-SESS-FLUSH";
     pub const SESS_NOTFOUND: &str = "E-SESS-NOTFOUND";
 
     // --- SHELL ---
@@ -345,6 +351,7 @@ pub mod codes {
     pub const SUB_TOOLS: &str = "E-SUB-TOOLS";
 
     // --- TODO ---
+    pub const TODO_DUPLICATE: &str = "E-TODO-DUPLICATE";
     pub const TODO_STATUS: &str = "E-TODO-STATUS";
 
     // --- TOOL ---
@@ -479,6 +486,8 @@ pub const ALL_CODES: &[&str] = &[
     codes::REGEX_SYNTAX,
     codes::REGEX_TOOBIG,
     codes::SANDBOX_DENY,
+    codes::SESS_CORRUPT,
+    codes::SESS_FLUSH,
     codes::SESS_NOTFOUND,
     codes::SHELL_EXITNONZERO,
     codes::SHELL_NOEXEC,
@@ -491,6 +500,7 @@ pub const ALL_CODES: &[&str] = &[
     codes::SUB_FAILED,
     codes::SUB_TIMEOUT,
     codes::SUB_TOOLS,
+    codes::TODO_DUPLICATE,
     codes::TODO_STATUS,
     codes::TOOL_BADJSON,
     codes::TOOL_BADSCHEMA,
@@ -516,6 +526,7 @@ pub const ALL_CODES: &[&str] = &[
     codes::DISC_CAP,
     codes::DISC_SYMLINK,
     codes::EDIT_FUZZY,
+    codes::EDIT_TIMEOUT,
     codes::HOOK_FAILED,
     codes::IDX_STORM,
     codes::INJ_OBSCURE,
@@ -524,6 +535,7 @@ pub const ALL_CODES: &[&str] = &[
     codes::PERM_BADREGEX,
     codes::PLAN_MDREGEN,
     codes::PLAN_TODODRIFT,
+    codes::REG_FALLBACK,
     codes::SANDBOX_ADVISORY,
     codes::SHELL_DISCARDED,
     codes::TOOL_BURST,

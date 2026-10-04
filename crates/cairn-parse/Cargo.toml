@@ -1,6 +1,6 @@
 [package]
 name = "cairn-parse"
-description = "Tool-call argument parsers: JSON, RFC 8259, pretty/compact diff (SPEC 4.3)"
+description = "Tree-sitter wrapper: grammars, queries, syntax validation (SPEC 5.2, 6.3.6, 6.7.4)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

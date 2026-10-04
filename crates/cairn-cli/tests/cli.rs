@@ -230,12 +230,19 @@ fn t_cli_021_help_on_every_subcommand() {
         }
         if in_commands && line.starts_with("  ") {
             let trimmed = line.trim();
-            if let Some(name) = trimmed.split_whitespace().next() {
+            // `wrap_help` folds a long description onto the next line, and that
+            // continuation is indented just like a real row — so accept only
+            // tokens that can be clap subcommand names (all of §11.1's are).
+            if let Some(name) = trimmed
+                .split_whitespace()
+                .next()
+                .filter(|tok| tok.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
+            {
                 names.push(name.to_string());
             }
         }
     }
-    assert!(names.len() >= 13, "command tree looks truncated: {names:?}");
+    assert!(names.len() >= 14, "command tree looks truncated: {names:?}");
 
     for name in &names {
         // clap's built-in `help` subcommand takes a command name, not a flag.
@@ -794,7 +801,7 @@ fn resume_of_a_real_session_names_m3() {
         dir.join("ses_01.jsonl"),
         "{\"v\":1,\"type\":\"header\",\"schema_version\":1,\"session_id\":\"ses_01\",\
          \"created_at\":\"2026-10-03T00:00:00.000Z\",\"workspace\":\"/ws\",\"mode\":\"build\",\
-         \"model\":\"anthropic/claude-sonnet-4-5\",\"cairn_version\":\"0.1.0\"}\n",
+         \"model\":\"anthropic/claude-sonnet-4-5\",\"cairn_version\":\"0.1.0\",\"ruleset_version\":null,\"parent_session\":null}\n",
     )
     .unwrap();
 
@@ -809,6 +816,294 @@ fn resume_of_a_real_session_names_m3() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("E-IMPL-STAGE"));
+}
+
+// ------------------------------------------------- session fixtures (M1)
+
+/// One stored session, one line per record (SPEC §11.7).
+fn put_session(fx: &Fixture, id: &str, records: &[&str]) -> PathBuf {
+    let dir = fx.home.join("data/sessions/ws16");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{id}.jsonl"));
+    let mut text = String::new();
+    for record in records {
+        text.push_str(record);
+        text.push('\n');
+    }
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+fn header_record(id: &str) -> String {
+    serde_json::json!({
+        "v": 1, "type": "header", "schema_version": 1, "session_id": id,
+        "created_at": "2026-10-03T00:00:00.000Z", "workspace": "/ws", "mode": "build",
+        "model": "anthropic/claude-sonnet-4-5", "cairn_version": "0.1.0",
+        "ruleset_version": null, "parent_session": null,
+    })
+    .to_string()
+}
+
+/// A `message` record: the §4.1 `Message` nested under `message` (SPEC §11.7).
+fn message_record(seq: u64, role: &str, text: &str) -> String {
+    serde_json::json!({
+        "v": 1, "type": "message", "seq": seq, "ts": "2026-10-03T00:00:01.000Z",
+        "turn_id": 1,
+        "message": {
+            "id": format!("m{seq}"), "role": role,
+            "blocks": [{"kind": "text", "text": text}],
+            "created_at": "2026-10-03T00:00:01.000Z",
+            "usage": null, "turn_id": 1,
+        },
+    })
+    .to_string()
+}
+
+fn tool_result_record(seq: u64) -> String {
+    serde_json::json!({
+        "v": 1, "type": "tool_result", "seq": seq, "ts": "2026-10-03T00:00:02.000Z",
+        "turn_id": 1, "call_id": "c1", "name": "bash", "ok": true,
+        "output": "done", "duration_ms": 5, "truncated": false,
+    })
+    .to_string()
+}
+
+/// A session that holds one secret, for the export redaction cases.
+fn session_with_a_secret(fx: &Fixture) {
+    put_session(
+        fx,
+        "ses_sec",
+        &[
+            &header_record("ses_sec"),
+            &message_record(1, "user", "my token is token = sk-abcdefghijklmnop123456"),
+            &message_record(2, "assistant", "hello"),
+            &tool_result_record(3),
+        ],
+    );
+}
+
+/// T-CLI-015: a session id that is not stored is a resource-not-found, not a
+/// usage error (SPEC §11.2 exit 9).
+#[test]
+fn t_cli_015_unknown_session_is_exit_9() {
+    let fx = Fixture::new();
+    for args in [vec!["export", "ses_missing"], vec!["resume", "ses_missing"]] {
+        let out = fx.cairn().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(9), "{args:?}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("E-SESS-NOTFOUND"), "{args:?}: {stderr}");
+    }
+}
+
+/// T-SESS-023: a record that is not JSON makes `export`/`resume` fail with
+/// `E-SESS-CORRUPT` (exit 9) and leaves the file byte-identical.
+#[test]
+fn t_see_023_a_corrupt_record_is_reported_and_never_rewritten() {
+    let fx = Fixture::new();
+    let path = put_session(
+        &fx,
+        "ses_bad",
+        &[
+            &header_record("ses_bad"),
+            &message_record(1, "user", "first"),
+            "not json",
+            &message_record(2, "assistant", "third"),
+        ],
+    );
+    let before = std::fs::read(&path).unwrap();
+
+    for args in [vec!["export", "ses_bad"], vec!["resume", "ses_bad"]] {
+        let out = fx.cairn().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(9), "{args:?}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("E-SESS-CORRUPT"), "{args:?}: {stderr}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "{args:?} must not touch the file"
+        );
+    }
+}
+
+/// T-SESS-031: md/json/html all render, and `--output PATH` writes a file
+/// (stdout stays the default for every format).
+#[test]
+fn t_see_031_export_renders_every_format_and_can_write_a_file() {
+    let fx = Fixture::new();
+    session_with_a_secret(&fx);
+
+    for (format, needle) in [
+        ("md", "## User"),
+        ("json", "\"messages\""),
+        ("html", "<!doctype html>"),
+    ] {
+        let out = fx
+            .cairn()
+            .args(["export", "ses_sec", "--format", format])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{format}: {out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains(needle), "{format}: {stdout}");
+    }
+
+    let dest = fx.home.join("session.html");
+    let out = fx
+        .cairn()
+        .args([
+            "export",
+            "ses_sec",
+            "--format",
+            "html",
+            "--output",
+            &dest.display().to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(out.stdout.is_empty(), "stdout is not the destination here");
+    let written = std::fs::read_to_string(&dest).unwrap();
+    assert!(written.starts_with("<!doctype html>"), "{}", &written[..40]);
+
+    // A destination that cannot be created is reported, not silently dropped.
+    let out = fx
+        .cairn()
+        .args([
+            "export",
+            "ses_sec",
+            "--output",
+            &fx.home.join("nope/x.html").display().to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(9), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("E-FS-NOPARENT"),
+        "{out:?}"
+    );
+}
+
+/// T-SEC-012 / REQ-CLI-010: redaction is on unless it was deliberately, and
+/// verifiably, turned off.
+#[test]
+fn t_sec_012_export_redacts_by_default_and_refuses_to_stop() {
+    let fx = Fixture::new();
+    session_with_a_secret(&fx);
+
+    // Default: the secret never reaches stdout.
+    let out = fx
+        .cairn()
+        .args(["export", "ses_sec", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("sk-abcdefghijklmnop123456"),
+        "redacted by default: {stdout}"
+    );
+    assert!(stdout.contains("REDACTED"), "{stdout}");
+
+    // Off, with no terminal to ask and no env escape hatch: refuse (exit 2).
+    let out = fx
+        .cairn()
+        .args(["export", "ses_sec", "--no-redact", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("E-CLI-USAGE"),
+        "{out:?}"
+    );
+
+    // The documented script escape hatch works.
+    let out = fx
+        .cairn()
+        .env("CAIRN_ALLOW_UNREDACTED_EXPORT", "1")
+        .args(["export", "ses_sec", "--no-redact", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("sk-abcdefghijklmnop123456"),
+        "{out:?}"
+    );
+}
+
+/// `cairn migrate` (SPEC §11.7.1, REQ-CLI-009): a v0 session and a v0
+/// `config.toml` both move to the schema this build writes, each keeping a
+/// backup first — and it must run *on* a config `validate` would reject.
+#[test]
+fn migrate_upgrades_sessions_and_config_with_backups() {
+    let fx = Fixture::new();
+
+    let dir = fx.home.join("data/sessions/ws16");
+    std::fs::create_dir_all(&dir).unwrap();
+    let session = dir.join("ses_old.jsonl");
+    let v0 = serde_json::json!({
+        "v": 1, "type": "header", "schema_version": 0, "session_id": "ses_old",
+        "created_at": "2026-10-03T00:00:00.000Z", "workspace": "/ws", "mode": "build",
+        "model": "m", "cairn_version": "0.0.1",
+    })
+    .to_string();
+    std::fs::write(&session, format!("{v0}\n")).unwrap();
+
+    std::fs::write(
+        fx.user_config(),
+        "schema_version = 0\n# keep this comment\n[providers.openai]\napi_key_env = \"OPENAI_API_KEY\"\n",
+    )
+    .unwrap();
+
+    let out = fx.cairn().arg("migrate").output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ses_old"), "{stdout}");
+    assert!(stdout.contains("schema_version 0 → 1"), "{stdout}");
+
+    let text = std::fs::read_to_string(&session).unwrap();
+    assert!(text.contains("\"schema_version\":1"), "{text}");
+    assert!(dir.join("ses_old.jsonl.bak-v0").exists(), "session backup");
+
+    let cfg = std::fs::read_to_string(fx.user_config()).unwrap();
+    assert!(cfg.contains("schema_version = 1"), "{cfg}");
+    assert!(cfg.contains("# keep this comment"), "comments survive");
+    assert!(cfg.contains("api_key_env"), "content survives");
+    assert!(
+        fx.home.join("config/config.toml.bak-v0").exists(),
+        "config backup: {cfg}"
+    );
+
+    // A second run changes nothing.
+    let out = fx.cairn().arg("migrate").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("nothing to migrate"),
+        "{out:?}"
+    );
+}
+
+/// A config written by a *newer* Cairn is never downgraded (SPEC §0: no
+/// downgrades) — `E-CFG-VERSION`, exit 2, bytes untouched.
+#[test]
+fn migrate_refuses_to_downgrade_a_newer_config() {
+    let fx = Fixture::new();
+    let newer = "schema_version = 2\n# from the future\n";
+    std::fs::write(fx.user_config(), newer).unwrap();
+
+    let out = fx.cairn().arg("migrate").output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("E-CFG-VERSION"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(fx.user_config()).unwrap(),
+        newer,
+        "a refusal must not rewrite the file"
+    );
 }
 
 /// `--quiet` never swallows the code line (REQ-CLI-002, global flag).
@@ -877,8 +1172,8 @@ fn stubs_name_their_milestone() {
     let fx = Fixture::new();
     let cases: [(&[&str], &str); 6] = [
         (&["chat"], "M3"),
+        (&["init"], "M3"),
         (&["update"], "M5"),
-        (&["migrate"], "M1"),
         (&["mcp", "inspect", "x"], "M4"),
         (&["mcp", "refresh"], "M4"),
         (&["auth", "login", "anthropic"], "M1"),
@@ -899,6 +1194,7 @@ fn no_bare_unimplemented_paths() {
     // A panic would exit 101 with a Rust backtrace instead of a stable code.
     for args in [
         vec!["chat"],
+        vec!["init"],
         vec!["update"],
         vec!["migrate"],
         vec!["export", "ses_x"],

@@ -2,21 +2,25 @@
 
 Maps to `SPEC.md` §15.4 milestones and §14.2 traceability. Updated at every checkpoint.
 
-## Status: **M0 (Skeleton & contracts) — complete**
+## Status: **M0 (Skeleton & contracts) — complete · M1 (Provider + headless loop) — in progress**
 
-All §15.4 M0 exit criteria pass. Verification (re-run after any change):
+M0 remains green; every gate below is re-run after each M1 change. M1 currently has the
+session store (`cairn-session`) and the three commands built on it (`sessions`, `export`,
+`migrate`) — see [M1 progress](#m1-progress).
+
+### Gates (re-run after any change)
 
 | Gate | Command | Result |
 |------|---------|--------|
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **194 passed, 0 failed, 0 warnings** |
-| MSRV | `cargo +1.83.0 test --workspace` | 194 passed (D-01 / `rust-version`) |
-| Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% |
+| Tests | `cargo test --workspace` | **247 passed, 0 failed, 0 warnings** |
+| MSRV | `cargo +1.83.0 test --workspace` | 247 passed (D-01 / `rust-version`) |
+| Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
-| Advisories | `cargo audit` | 0 vulnerabilities in 132 crates |
-| Documents | `scripts/lint-docs.sh` | 5 checks green (req→test, codes, links, fences, spec mirror) |
+| Advisories | `cargo audit` | 0 vulnerabilities in 141 crates |
+| Documents | `scripts/lint-docs.sh` | 6 checks green (req→test, test ids, codes, links, fences, spec mirror) |
 | Schemas | `scripts/check-schemas.sh` | 33 event schemas + config schema, no drift |
 
 ### Exit criteria (§15.4 M0)
@@ -24,16 +28,16 @@ All §15.4 M0 exit criteria pass. Verification (re-run after any change):
 | Criterion | State |
 |-----------|-------|
 | T-CFG-001..006, T-CFG-010..030 | ✅ `cairn-config` (54 tests) |
-| T-CLI-001..003, T-CLI-020..023 | ✅ `cairn-cli` (40 unit + 27 integration) |
+| T-CLI-001..003, T-CLI-020..023 | ✅ `cairn-cli` (43 unit + 33 integration) |
 | T-ARCH-001..008 | ✅ `cairn-cli/tests/arch.rs` (12 tests) |
 | T-SCHEMA-001..003 | ✅ committed schemas are byte-drift-checked |
 | T-TECH-001 | ✅ `deny.toml` + `cargo deny check` |
 | coverage ≥ 70% (`cairn-config`, `cairn-core`) | ✅ measured with `cargo-llvm-cov` |
 | Workspace + all crates stubbed | ✅ 19 members |
 | Config loader + validation + JSON Schema | ✅ layered, §11.5 merge table, `schemas/config.schema.json` |
-| CLI skeleton, all subcommands/flags | ✅ 13 subcommands |
+| CLI skeleton, all subcommands/flags | ✅ 14 subcommands (13 at M0; `init` added in M1 — §16.5) |
 | Event bus + event schemas | ✅ 32 kinds → 33 committed schema files |
-| Error-code registry | ✅ 153 documented codes ↔ `cairn-core` 1:1 |
+| Error-code registry | ✅ 158 documented codes ↔ `cairn-core` 1:1 |
 | CI (lint, unit, coverage) on 3 OS | ✅ `.github/workflows/ci.yml` |
 | ADRs for D-01..D-18 | ✅ `docs/adr/ADR-0001..0018` (+ 0019, 0020) |
 
@@ -45,10 +49,11 @@ All §15.4 M0 exit criteria pass. Verification (re-run after any change):
 | `cairn-config` | 54 |
 | `cairn-tui` | 7 |
 | `cairn-eventbus` | 6 |
-| `cairn-cli` unit | 40 |
-| `cairn-cli` integration (`cli.rs`) | 27 |
+| `cairn-session` (M1) | 44 |
+| `cairn-cli` unit | 43 |
+| `cairn-cli` integration (`cli.rs`) | 33 |
 | `cairn-cli` architecture (`arch.rs`) | 12 |
-| **Total** | **194** |
+| **Total** | **247** |
 
 ### Documentation deliverables (§15.6)
 
@@ -73,7 +78,9 @@ All §15.4 M0 exit criteria pass. Verification (re-run after any change):
 | `cairn-core::event` — 32 event kinds + JSON Schema generation (REQ-ARCH-009) | done | T-SCHEMA-001, T-SCHEMA-002 |
 | `cairn-eventbus`: typed events + critical/droppable lanes (REQ-ARCH-005/006) | done | T-ARCH-005, T-ARCH-006 |
 | `cairn-config`: layered load, merge, validation, `--effective`, JSON Schema + flag annotations | done | T-CFG-001..007, T-CFG-010..013, T-CFG-020, T-CFG-030 |
-| `cairn-cli`: full command tree + flags, `version`, `config`, `doctor`, `auth`, `mcp`, `sessions` | done | T-CLI-001 (partial), T-CLI-002, T-CLI-020..023, T-CFG-005 |
+| `cairn-cli`: full command tree + flags, `version`, `config`, `doctor`, `auth`, `mcp` | done | T-CLI-001 (partial), T-CLI-002, T-CLI-020..023, T-CFG-005 |
+| `cairn-session`: JSONL store, read contract, migration, export, GC (§11.7) | done (M1) | T-SESS-010, T-SESS-011, T-SESS-012, T-SESS-020, T-SESS-023, T-SESS-030, T-SESS-031 |
+| `cairn-cli`: `sessions` on the real store, `export`, `migrate`, `resume <id>` load check | done (M1) | T-CLI-015, T-SEC-012 |
 | `cairn-tui`: slash-command registry (§10.3, REQ-TUI-004) | done | T-CLI-003 |
 | Stub crates for all 19 workspace members (compile + document boundaries) | done | T-ARCH-001, T-ARCH-003 |
 | CI: `lint`, `unit-int` (ubuntu/macOS/Windows), `coverage`, `msrv` | done | §14.7 matrix, M0 subset |
@@ -81,7 +88,11 @@ All §15.4 M0 exit criteria pass. Verification (re-run after any change):
 
 ### Not yet implemented (by milestone)
 
-- **M1** — providers, SSE, streaming loop, headless `run`, session store: T-PROV-*, T-SESS-*, T-FAULT-*, T-CLI-010..017
+- **M1** — `cairn-sse` (D-04), the `Provider` trait in `cairn-provider` (`Capabilities`,
+  `StreamEvent`, boxed futures per the amended §3.4), `cairn-parse`, `cairn-provider` (5 adapters,
+  §4.5 retry matrix, §4.8/§4.9 accounting + registry), the headless `run -p` loop with
+  text/json/stream-json and the §11.2 exit codes, logging + redaction (§12.1): T-PROV-*, T-FAULT-*,
+  T-CLI-010..014/016/017, T-ARCH-005..007. The session half (T-SESS-*) has landed — see below.
 - **M2** — tools, edit/fuzzy, bash, git, checkpoints, permissions: T-TOOL-*, T-EDIT-*, T-CMD-*, T-PERM-*, T-CHK-*
 - **M3** — context engine, index, TUI: T-CTX-*, T-TUI-*, T-PROMPT-*
 - **M4** — modes, guardrails, sandbox, injection defenses, subagents, MCP, hooks: T-MODE-*, T-SBOX-*, T-SEC-020..030, T-LOOP-*
@@ -89,9 +100,73 @@ All §15.4 M0 exit criteria pass. Verification (re-run after any change):
 
 ### Interim behavior (removed as milestones land)
 
-`cairn run`, `cairn chat`, `cairn resume <id>`, `cairn export`, `cairn update` parse and validate their
-flags, then exit `1` with `E-IMPL-STAGE` naming the milestone that delivers them. This code is removed
-in the milestone that implements the command; it exists so the M0 CLI surface is complete and testable.
+`cairn run`, `cairn chat`, `cairn init`, `cairn resume <id>` and `cairn update` parse and validate
+their flags, then exit `1` with `E-IMPL-STAGE` naming the milestone that delivers them. This code is
+removed in the milestone that implements the command; it exists so the CLI surface is complete and
+testable — including the command `cairn doctor` points people at.
+(`cairn export` and `cairn migrate` were the last of these and are now real.)
+
+## M1 progress
+
+### Landed
+
+| Area | State | Test IDs |
+|------|-------|----------|
+| `cairn-session` — `Record`/`Header` (§11.7), JSONL append with `write` + `fsync` (REQ-LOOP-006), `0600` on create, atomic `save` (REQ-CLI-009) | done | T-SESS-010, T-SESS-020 |
+| Read contract — torn last line discarded, mid-file corruption → `E-SESS-CORRUPT` with the file left byte-identical, non-UTF-8 → `E-FS-ENCODING` | done | T-SESS-023 |
+| Migration — `v0 → v1`, backup first, no downgrade, unknown records preserved verbatim | done | T-SESS-011, T-SESS-012 |
+| Export — `md` / `json` / `html`, redaction before markup, images exported as `[image: <type>]` | done | T-SESS-031, T-SEC-012 |
+| GC — 90 days / 500 sessions per workspace, tombstone then unlink after 7 days, `in_progress` plans protected, 24 h throttle | done | T-SESS-030 |
+| `cairn sessions` — rebuilt on `Store::list_all` (all workspace dirs, newest first, `--json/--limit/--workspace/--grep`) | done | §11.1 |
+| `cairn export` — real, with `--format`, `--output PATH`, `--no-redact` confirmation (exit 2 outside a TTY without `CAIRN_ALLOW_UNREDACTED_EXPORT=1`) | done | T-SESS-031, T-SEC-012, T-CLI-015 |
+| `cairn migrate` — sessions **and** every `config.toml` layer, run before the startup checks so it can repair the config `validate` rejects | done | §11.7.1, REQ-CLI-009 |
+| `cairn resume <id>` — loads the session first, so a corrupt file reports `E-SESS-CORRUPT` (exit 9) instead of "not implemented" | done | T-SESS-023 |
+| `cairn init [--global]` — the subcommand §11.1 was missing while P3, §4.10, §7.3, REQ-SAFE-003, T-SEC-014 and `cairn doctor`'s "no AGENTS.md" hint all told people to run it; it parses and reports `E-IMPL-STAGE` M3 (delivered with §10.3's `/init`) | done | §11.1, T-SEC-014 |
+| `[migrate] auto = true` — the §11.7 config key that §11.4.1 (which claims to list every key) did not define; `cairn config` would have rejected it | done | §11.4.1, §11.7 |
+| `hints_only_name_real_subcommands` — every ``cairn <cmd>`` that appears in a hint must be a real subcommand, so the `cairn init` gap cannot recur | done | §12.3 |
+
+### Decisions taken while landing the session store
+
+1. **`E-SESS-FLUSH` added** (157 → 158 codes): REQ-CLI-002 demands a stable `E-*` code for *every*
+   non-zero exit, and a record that cannot be written/fsynced (exit 13) had none.
+2. **`message` records nest the `Message`** under `message` with `turn_id` beside it — §11.7 lists this
+   record's fields as `seq`, `turn_id`, `message`, so flattening would not match the table.
+3. **`header.ruleset_version` and `header.parent_session` are mandatory, `plan_id` is not** — the §11.7
+   table marks only `plan_id` with `?`. They are therefore written on every header (`null` for a first
+   session); dropping them in a rewrite would make the next read corrupt.
+4. **`cairn migrate` is dispatched before `emit_startup_issues`.** A wrong `schema_version` is exactly
+   what `validate` reports as fatal, so a repair command waiting behind that report could never run on
+   the only files it exists to fix.
+5. **`--output` carries two meanings** (§11.1 global table: format; §11.1 export signature: destination).
+   clap allows one long per command, so export reads the *global* value back as a path and skips it when
+   building the `output.format` override (which is an enum and would reject every path).
+
+### Spec amendments landed with M1 (all recorded in §16.5)
+
+Written before the provider work starts, because two of them decide *where that code goes*.
+
+1. **§11.8 was at the end of the file**, after §16.5's audit result, though §0, §14.3.10 and
+   `docs/config-reference.md` all cite it as §11.8 → moved between §11.7 and §12.
+2. **§3.4 put `Provider` in `cairn-core/src/provider.rs` and `Tool` in `cairn-core/src/tool.rs`**,
+   while §3.2 assigns the `Provider` trait to `cairn-provider` and the `Tool` trait to `cairn-tools`,
+   and gives `cairn-core` the dependency row `std, serde, thiserror` — which cannot express the
+   `BoxStream` the same block already returns. §3.4's path comments now name the §3.2 crates, so
+   `cairn-core` keeps its dependency row and the M1 trait lands in `cairn-provider`.
+3. **§3.4's `async fn` signatures are not object-safe** (the return type names `Self`), so the
+   registry's `Box<dyn Provider>` and `Arc<dyn Tool>` would not compile → `Provider::stream`,
+   `Provider::count_tokens` and `Tool::execute` now return `futures::future::BoxFuture<'a, …>`,
+   with §3.4 stating which traits need boxing and why.
+4. **D-02's `CancellationToken` had no crate in §15.2** (tokio does not ship it) → `tokio-util` 0.7
+   row added.
+5. **`cairn init` did not exist in §11.1** despite six references, one of them normative
+   (REQ-SAFE-003) → added as `cairn init [--global]`, the CLI form of §10.3's `/init`, stubbed to M3.
+6. **`migrate.auto` was referenced by §11.7 but absent from §11.4.1** → `[migrate] auto = true` added
+   to the config listing and to `cairn-config` (`MigrateConfig`, schema regenerated).
+7. **`cairn-parse`'s manifest described §4.3's tool-argument parsing**, which §3.2 assigns to
+   `cairn-provider` → manifest and crate docs now say "Tree-sitter wrapper: grammars, queries,
+   syntax validation (SPEC 5.2, 6.3.6, 6.7.4)".
+8. **§11.1 lists `--output` twice with two meanings** → one flag with two readings (decision 5 above);
+   a format spelling at `export` is refused with `E-CLI-USAGE` rather than creating a file called `json`.
 
 ## Known limitations of the M0 delivery
 
@@ -139,7 +214,9 @@ in the milestone that implements the command; it exists so the M0 CLI surface is
 
 ## Next: M1 — Provider + headless loop
 
-`cairn-sse` (hand-written SSE parser, D-04) → `cairn-provider` (`Provide` trait, 5 adapters, retry
-matrix §4.5, token/cost accounting) → `cairn-parse` → `cairn-session` (JSONL store) → headless
-`cairn run -p …` with text/json/stream-json output and the §11.2 exit codes. M0 hands over a green
-baseline: every gate above must stay green as these land.
+The session store and its three commands are done, and the spec now agrees with where the
+provider code belongs. Next, in order: `cairn-sse` (hand-written SSE parser, D-04) →
+`cairn-provider` (the boxed `Provider` trait, `Capabilities`, `StreamEvent`, then the 5 adapters,
+the §4.5 retry matrix, and §4.8/§4.9 token/cost accounting + registry) → `cairn-parse` → headless
+`cairn run -p …` with text/json/stream-json output and the §11.2 exit codes → logging + redaction
+(§12.1). Every gate above must stay green as these land.

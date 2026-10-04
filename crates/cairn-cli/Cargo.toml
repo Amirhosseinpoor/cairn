@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 cairn-core.workspace = true
 cairn-config.workspace = true
+cairn-session.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 serde.workspace = true

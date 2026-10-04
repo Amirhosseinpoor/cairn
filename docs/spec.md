@@ -67,7 +67,7 @@
 | Kind | Pattern | Example | Range |
 |------|---------|---------|-------|
 | Requirement | `REQ-<AREA>-<NNN>` | `REQ-SAFE-014` | areas: PROD, TECH, ARCH, PROV, CTX, TOOL, MODE, LOOP, SAFE, TUI, CLI, OPS, PERF — 153 IDs, contiguous per area |
-| Test case | `T-<AREA>-<NNN>` | `T-CMD-031` | 448 IDs; ranges (`T-CMD-001..056`) enumerate each integer as an individual case |
+| Test case | `T-<AREA>-<NNN>` | `T-CMD-031` | 449 IDs; ranges (`T-CMD-001..056`) enumerate each integer as an individual case |
 | Assumption | `A-NN` | `A-05` | A-01..A-10 |
 | Open question | `OQ-NN` | `OQ-03` | OQ-01..OQ-05 |
 | Decision | `D-NN` | `D-09` | D-01..D-18 |
@@ -377,18 +377,30 @@ flowchart TD
 
 ### 3.4 Core interfaces (normative Rust signatures)
 
+Crate placement follows §3.2: the `Provider` trait lives in `cairn-provider` and the `Tool`
+trait in `cairn-tools`, so `cairn-core` keeps the §3.2 dependency row `std, serde, thiserror`
+and cannot express `BoxStream` at all.
+
+A trait the runtime holds behind `dyn` — `Provider` (the registry keyed by `provider/…`) and
+`Tool` (the tool list) — returns `futures::future::BoxFuture` rather than `async fn`, because
+`async fn` in a trait is not object-safe: its return type names `Self`. Traits that are always
+held concretely may keep `async fn`.
+
 ```rust
-// cairn-core/src/provider.rs
+// cairn-provider/src/lib.rs
 pub trait Provider: Send + Sync + 'static {
     fn id(&self) -> &ProviderId;                       // e.g. "anthropic"
     fn capabilities(&self) -> Capabilities;
     /// Streaming is the only supported mode; non-streaming adapters buffer internally.
-    async fn stream(
-        &self,
+    fn stream<'a>(
+        &'a self,
         req: ModelRequest,
         cancel: CancellationToken,
-    ) -> Result<BoxStream<'static, StreamEvent>, ProviderError>;
-    async fn count_tokens(&self, req: &ModelRequest) -> Result<TokenCount, ProviderError>;
+    ) -> BoxFuture<'a, Result<BoxStream<'static, StreamEvent>, ProviderError>>;
+    fn count_tokens<'a>(
+        &'a self,
+        req: &'a ModelRequest,
+    ) -> BoxFuture<'a, Result<TokenCount, ProviderError>>;
     fn health(&self) -> ProviderHealth;                // Cheap, non-network capability probe
 }
 
@@ -419,7 +431,7 @@ pub enum StreamEvent {
 ```
 
 ```rust
-// cairn-core/src/tool.rs
+// cairn-tools/src/lib.rs
 pub trait Tool: Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;             // model-facing, ≤ 2000 chars
@@ -431,12 +443,12 @@ pub trait Tool: Send + Sync + 'static {
     fn timeout(&self) -> Duration;
     fn max_output_bytes(&self) -> u32;
     fn requires_serial(&self) -> bool;
-    async fn execute(
-        &self,
+    fn execute<'a>(
+        &'a self,
         input: serde_json::Value,
         ctx: ToolContext,
         cancel: CancellationToken,
-    ) -> Result<ToolOutput, ToolError>;
+    ) -> BoxFuture<'a, Result<ToolOutput, ToolError>>;
 }
 
 pub struct ToolContext {
@@ -1419,7 +1431,7 @@ Errors: `E-WEB-DNS`, `E-WEB-TLS`, `E-WEB-TIMEOUT`, `E-WEB-STATUS` (`HTTP 404 fro
 ```
 Output: `{"todos_saved":7,"completed":3,"pending":4,"plan_id":null}`
 Semantics: full replacement (not merge) of `.cairn/todos.json` for the session; MUST emit `Event::plan.step` when `plan_id` set.
-Errors: `E-TODO-DUPLICATE-ID`, `E-TODO-STATUS`, `E-STATE-PERM` (plan mode: writing todos under `.cairn/` is allowed in all modes).
+Errors: `E-TODO-DUPLICATE`, `E-TODO-STATUS`, `E-STATE-PERM` (plan mode: writing todos under `.cairn/` is allowed in all modes).
 
 #### 6.2.17 `ask_user`
 
@@ -1515,7 +1527,7 @@ Applied when exact match fails and `fuzzy != "off"`. Algorithm:
 5. If no grammar: `syntax_ok: null`, no validation (still write).
 6. For `bash`/config languages (`.toml`, `.yaml`, `.json`), run a full-document parse (JSON/YAML/TOML validators) — failure always blocks, regardless of edit range.
 - REQ-TOOL-014: Rollback MUST be byte-exact (test T-EDIT-021 compares sha256 before/after).
-- REQ-TOOL-015: Validation MUST complete within 500 ms for files ≤ 1 MiB; on timeout, proceed with the write and set `syntax_ok: null` + `W-EDIT-VALIDATE-TIMEOUT`.
+- REQ-TOOL-015: Validation MUST complete within 500 ms for files ≤ 1 MiB; on timeout, proceed with the write and set `syntax_ok: null` + `W-EDIT-TIMEOUT`.
 
 ### 6.4 `bash` tool behavior (normative)
 
@@ -2746,6 +2758,8 @@ cairn export  SESSION_ID [--format md|json|html] [--output PATH] [--redact]
 cairn version [--json]
 cairn completions bash|zsh|fish|powershell
 cairn migrate  # force session/config migration
+cairn init     [--global]  # scaffold AGENTS.md, .cairnignore, .cairn/config.toml,
+                           # and the .gitignore entries REQ-SAFE-003 / §7.3 ask for (CLI form of §10.3 /init)
 ```
 
 **Global flags (apply to every subcommand):**
@@ -2806,7 +2820,7 @@ cairn migrate  # force session/config migration
 
 - REQ-CLI-001: Exit codes MUST be stable across 1.x; any change is a breaking change requiring `v` bump in §14.7.
 - REQ-CLI-002: Every non-zero exit MUST print at least one line containing the stable error code (`E-…`) and a hint, except `--quiet` (then only the code line).
-- CLI-level codes (whole-command scope, as opposed to the per-subsystem codes elsewhere): `E-CLI-USAGE` (parse/validate failure of the invocation, exit 2), `E-SESS-NOTFOUND` (unknown `SESSION_ID`, exit 9), `E-IMPL-STAGE` (`not implemented yet (delivered in milestone M<n>)`, exit 1). The last one exists only while §15.4 milestones are outstanding and MUST shrink with each release; it never replaces a subsystem's own code once that subsystem ships.
+- CLI-level codes (whole-command scope, as opposed to the per-subsystem codes elsewhere): `E-CLI-USAGE` (parse/validate failure of the invocation, exit 2), `E-SESS-NOTFOUND` (unknown `SESSION_ID`, exit 9), `E-SESS-CORRUPT` (session file present but unreadable as a Cairn session, exit 9), `E-SESS-FLUSH` (a session record could not be written or fsynced; exit 13 when it is the shutdown flush), `E-IMPL-STAGE` (`not implemented yet (delivered in milestone M<n>)`, exit 1). The last one exists only while §15.4 milestones are outstanding and MUST shrink with each release; it never replaces a subsystem's own code once that subsystem ships.
 
 ### 11.3 Environment variables
 
@@ -2936,6 +2950,9 @@ retention_days = 90                # int 1..3650
 max_sessions = 500                 # int 10..100000
 auto_recover = false               # bool (§8.7)
 kill_jobs_on_exit = false          # bool (§6.4.7)
+
+[migrate]
+auto = true                        # bool: rewrite an older session on resume, before it is read (§11.7)
 
 [checkpoint]
 enabled = true                     # bool
@@ -3147,6 +3164,8 @@ deny_ending_turn_after = 3         # int 1..20 (§8.3 T-5)
 
 Common fields: `v` (record schema version = 1), `seq` (u64, monotonic per file), `ts` (RFC3339 ms).
 
+**Read contract (T-SESS-020, T-SESS-023):** a byte sequence that is not UTF-8 → `E-FS-ENCODING`. A line that is not a JSON object, a file whose first record is not a `header`, or a `header.session_id` that disagrees with the file name → `E-SESS-CORRUPT` (exit 9: the session cannot be loaded; the file MUST be left byte-identical). A record that cannot be appended or fsynced → `E-SESS-FLUSH` (REQ-LOOP-006 writes one record at a time with `write` + `fsync`; at shutdown this is what produces exit 13, REQ-ARCH-008). Two things are *not* errors: a truncated **last** line, which is a `kill -9` tear and is discarded so resume still works (REQ-ARCH-008); and a record whose `type` is unknown, which is never reinterpreted and is preserved byte-for-byte whenever the file is rewritten (REQ-CLI-009).
+
 **Versioning & migration:**
 - `header.schema_version` < current → `cairn migrate` (or automatic migration on resume when `migrate.auto = true`, default true) rewrites the file to `<id>.jsonl.bak-v<n>` first, then writes the new version. Forward-only migrations; no downgrade.
 - Unknown record types MUST be preserved verbatim on rewrite (forward compatibility).
@@ -3165,6 +3184,11 @@ NOT restored: in-flight turn (§8.7), background jobs (pids from a dead process 
 | `html` | Single-file HTML with inline CSS (no external resources), same content as `md` |
 
 - REQ-CLI-010: `export` MUST run the redactor unless `--no-redact` is passed (which requires confirmation in TTY, or `CAIRN_ALLOW_UNREDACTED_EXPORT=1` in scripts).
+
+### 11.8 Configuration precedence example (worked)
+
+Given: default `mode=build`; user config `mode=auto`, `[ui] theme="cairn-light"`; project `.cairn/config.toml` `mode=plan`, `[ui] animation="off"`; env `CAIRN_MODEL=openai/o4-mini`; flag `--mode build`.
+Effective: `mode=build` (flag), `model=openai/o4-mini` (env), `ui.theme=cairn-light` (user), `ui.animation=off` (project). `cairn config list --effective` shows exactly these sources (test T-CFG-010).
 
 ---
 
@@ -3500,7 +3524,7 @@ Format: `ID | Preconditions | Steps | Expected`. All IDs are stable; a removed t
 | T-PROV-011 | usage arrives late | compare | cost uses actual tokens; `estimated:false` |
 | T-PROV-012 | model with `pricing=null` | compute | `cost_usd:null`, UI `cost: n/a` |
 | T-PROV-013 | model id absent from registry, no override | `config validate` | `E-CFG-NOMODEL` exit 2 |
-| T-PROV-014 | corrupt `models.json` | start | bundled copy used, `W-REGISTRY`, exit 0 |
+| T-PROV-014 | corrupt `models.json` | start | bundled copy used, `W-REG-FALLBACK`, exit 0 |
 | **SSE edge cases** | | | |
 | T-PROV-020 | chunk boundary splits `data:` line mid-JSON | feed 1-byte chunks | event parsed correctly, no loss |
 | T-PROV-021 | CRLF line endings (`\r\n\r\n`) | feed | parsed (REQ: §4.3 rule 1) |
@@ -3591,7 +3615,7 @@ Format: `ID | Preconditions | Steps | Expected`. All IDs are stable; a removed t
 | `E-JOB-NOTFOUND` / `E-JOB-LIMIT` | T-TOOL-126, T-TOOL-127 | ✓ |
 | `E-GIT-NOREPO` / `E-GIT-NOCFG` / `E-GIT-CMD` / `E-GIT-BADREV` / `E-GIT-NODIFF` / `E-GIT-EMPTY` / `E-GIT-CONFLICT` / `E-GIT-LOCK` / `E-GIT-PRECOMMIT` | T-GIT-001..009 | ✓ |
 | `E-WEB-DNS` / `E-WEB-TLS` / `E-WEB-TIMEOUT` / `E-WEB-STATUS` / `E-WEB-SSRF` / `E-WEB-SCHEME` / `E-WEB-TOOBIG` / `E-WEB-REDIRECTS` / `E-WEB-EXFIL` | T-WEB-001..009 | ✓ |
-| `E-TODO-DUPLICATE-ID` / `E-TODO-STATUS` | T-TOOL-128, T-TOOL-129 | ✓ |
+| `E-TODO-DUPLICATE` / `E-TODO-STATUS` | T-TOOL-128, T-TOOL-129 | ✓ |
 | `E-ASK-TIMEOUT` / `E-ASK-NOINPUT` | T-TOOL-130, T-TOOL-131 | ✓ |
 | `E-SUB-DEPTH` / `E-SUB-TOOLS` / `E-SUB-TIMEOUT` / `E-SUB-FAILED` / `E-SUB-DISABLED` | T-LOOP-010..014 | ✓ |
 | `E-TOOL-BADSCHEMA` / `E-TOOL-TOOBIG` / `E-TOOL-TIMEOUT` / `E-TOOL-CANCELLED` / `E-TOOL-BADJSON` | T-TOOL-132..136 | ✓ |
@@ -3603,7 +3627,8 @@ Format: `ID | Preconditions | Steps | Expected`. All IDs are stable; a removed t
 | `E-PLAN-INVALID` / `E-PLAN-DRIFT` | T-MODE-016, T-MODE-017 | ✓ |
 | `E-CHK-MERGE` / `E-CHK-DISK` / `E-CHK-FAIL` | T-CHK-016, T-CHK-015, T-CHK-002 | ✓ |
 | `E-LOOP-*` (MAXTOKENS, VERIFY, INVARIANT, TRANSITION) | T-LOOP-015..018 | ✓ |
-| `E-CLI-USAGE` / `E-SESS-NOTFOUND` / `E-IMPL-STAGE` | T-CLI-001, T-CLI-002 | ✓ |
+| `E-CLI-USAGE` / `E-SESS-NOTFOUND` / `E-SESS-CORRUPT` / `E-SESS-FLUSH` / `E-IMPL-STAGE` | T-CLI-001, T-CLI-002, T-SESS-023, T-ARCH-008 | ✓ |
+| `W-REG-FALLBACK` / `W-EDIT-TIMEOUT` | T-PROV-014, T-EDIT-024 | ✓ |
 | `E-CFG-*` (all §11.4.2 codes) | T-CFG-010..020 | ✓ |
 | `E-PROV-*` (all §4.5 codes) | T-PROV-034, T-PROV-038..048 | ✓ |
 | `E-UPDATE-SIGNATURE` | T-OPS-011 | ✓ |
@@ -3634,7 +3659,7 @@ Format: `ID | Preconditions | Steps | Expected`. All IDs are stable; a removed t
 | T-EDIT-021 | edit that introduces a syntax error (Rust) | execute | `E-EDIT-SYNTAX`, sha256 before == after (REQ-TOOL-014) |
 | T-EDIT-022 | edit breaking JSON in `package.json` | execute | blocked, error line/col from validator |
 | T-EDIT-023 | pre-existing `ERROR` node far from the edit | edit | edit succeeds (`syntax_ok:true`) |
-| T-EDIT-024 | file 1.2 MiB (validation timeout) | edit | writes, `syntax_ok:null`, `W-EDIT-VALIDATE-TIMEOUT` (REQ-TOOL-015) |
+| T-EDIT-024 | file 1.2 MiB (validation timeout) | edit | writes, `syntax_ok:null`, `W-EDIT-TIMEOUT` (REQ-TOOL-015) |
 | T-EDIT-025 | UTF-8 BOM file | edit | BOM retained byte-exact |
 
 #### 14.3.4 Context and compaction (T-CTX-*)
@@ -3838,6 +3863,7 @@ Container/VM matrix: Debian 12 (kernel 6.1 Landlock), Ubuntu 24.04 (6.8), macOS 
 | T-SESS-020 | kill -9 mid-record | torn last line discarded; resume OK (REQ-ARCH-008) |
 | T-SESS-021 | resume twice | no duplicated messages (REQ-LOOP-007) |
 | T-SESS-022 | dangling turn | recovery prompt with r/d/k; `rebuild` reissues model call once |
+| T-SESS-023 | replace record 7 of a session with `not json` | `export` / `resume` | `E-SESS-CORRUPT` exit 9, file byte-identical after the attempt |
 | T-SESS-030 | retention 90 d, 600 sessions | GC deletes oldest; `in_progress` plans protected |
 | T-SESS-031 | export md/json/html with `--redact` | secrets replaced; without flag in TTY → confirmation |
 
@@ -4154,6 +4180,7 @@ cairn/
 | Crate | Version | Purpose / reason |
 |-------|---------|------------------|
 | `tokio` | 1.42 | async runtime (D-02); features: rt-multi-thread, macros, sync, time, process, signal, fs, io-util |
+| `tokio-util` | 0.7 | `CancellationToken` — the D-02 cancellation tree (§3.1), which `tokio` itself does not ship |
 | `ratatui` | 0.29 | TUI (D-03) |
 | `crossterm` | 0.28 | terminal backend: alt screen, mouse, paste, resize, Windows |
 | `reqwest` | 0.12 | HTTP (D-04); rustls, stream, gzip, http2; no openssl |
@@ -4270,7 +4297,7 @@ Sequencing rationale: contracts first (M0) so parallel work on providers/tools/T
 
 ### 16.1 Requirement → test coverage
 - Total requirement IDs: **153**. Every one appears in the traceability matrix (§14.2) with ≥ 1 test ID. Verified mechanically by `scripts/lint-docs.sh --check-req-coverage` (extracts `REQ-*` and `T-*` sets; fails on any REQ without a test, or on any T-ID the matrix references that is defined nowhere else).
-- The error-code set is checked the same way: `scripts/lint-docs.sh --check-codes` asserts the `E-*`/`W-*` codes documented here and the constants in `crates/cairn-core/src/error.rs` are 1:1 — **153** codes, neither side able to drift from the other.
+- The error-code set is checked the same way: `scripts/lint-docs.sh --check-codes` asserts the `E-*`/`W-*` codes documented here and the constants in `crates/cairn-core/src/error.rs` are 1:1 — **158** codes, neither side able to drift from the other.
 - Residual mapping gaps found and fixed during audit: `REQ-ARCH-016` was a numbering gap → renumbered to `REQ-ARCH-011` (§14.2 updated accordingly); `T-SEC-019`, `T-OPS-004` and `T-PERF-010` were referenced by the matrix but had no definition row (§14.3.6, §14.3.12).
 - The same script mechanizes §15.3's documentation row: every relative Markdown link outside a code fence resolves, every fenced block is balanced, and `docs/spec.md` (§15.6) is byte-identical to this file.
 
@@ -4316,17 +4343,21 @@ Every error code in §14.3.2b defines: (a) **model-visible** behavior (`ok:false
 | D-13's allow-list omitted `Unicode-3.0`, which `unicode-ident` (via `proc-macro2`/`syn` → clap, schemars) requires as `(MIT OR Apache-2.0) AND Unicode-3.0` | Added `Unicode-3.0` to D-13: it is OSI-approved and permissive, and D-13 exists to reject copyleft (GPL/LGPL/MPL/SSPL/AGPL), not permissives outside its illustrative list |
 | `cairn-testkit` appears in the §15.1 tree but had no §3.2 row, so `T-ARCH-001` could not check its imports | Added the `cairn-testkit` row to §3.2 |
 | T-CFG-003 asserted `run` exits 0, which is unreachable while `run` is an `E-IMPL-STAGE` stub (M0→M1) | The row now states the invariant as *not exit 2* and records the stub's exit 1 until M1 |
+| `E-TODO-DUPLICATE-ID`, `W-EDIT-VALIDATE-TIMEOUT` and `W-REGISTRY` were documented (§6.2.16, REQ-TOOL-015, T-PROV-014) but never registered in `error.rs`, and the first and third break §0's `E-<AREA>-<NAME>` shape; `scripts/lint-docs.sh --check-codes` could not see them because its pattern allowed exactly one hyphen | Renamed to `E-TODO-DUPLICATE`, `W-EDIT-TIMEOUT` and `W-REG-FALLBACK` (areas `TODO`, `EDIT`, new area `REG` in `CODE_AREAS`), registered, and the lint pattern now accepts `E-<AREA>-<NAME>` with any number of hyphens while still rejecting the pseudo-codes `E-CTX` / `E-PERM` |
+| The session store had no code for a file that exists but is not a loadable Cairn session, and REQ-CLI-002's "every non-zero exit prints an `E-*` code" had nothing to print for exit 13 (`ERR_FLUSH`) | Added `E-SESS-CORRUPT` (§11.7 read contract, §11.2 CLI-level codes, §14.3.9 T-SESS-023) and `E-SESS-FLUSH` (§11.7 write contract, §11.2, covered by T-ARCH-008) |
 | `T-SEC-019`, `T-OPS-004`, `T-PERF-010` were mapped from requirements but defined in no test table | Definition rows added to §14.3.6, §14.3.12 and §14.3.11 respectively |
 | §15.1 described `clippy.toml` as carrying `too-many-threads = 0`, but neither that config key nor that lint exists in clippy | The comment now names the keys actually tuned: `msrv`, `too-many-lines-threshold`, `max-struct-bools` |
 | §15.1 pinned `rust-toolchain.toml` to `1.83.0`; pinning the *toolchain* there is unbuildable, because cargo 1.83 cannot parse the `edition2024` manifests in the dependency graph and the MSRV-aware resolver that would avoid them needs cargo ≥ 1.84 | The file requests `stable` + `rustfmt`/`clippy`; MSRV 1.83 is enforced instead by `rust-version`, by `.cargo/config.toml` (`resolver.incompatible-rust-versions = "fallback"`, which keeps `Cargo.lock` buildable at 1.83), and by a dedicated `msrv` CI job running `cargo +1.83.0 check --workspace --all-targets` and `cargo +1.83.0 test --workspace` |
 | §15.3's Schemas task was `cargo run -p cairn-cli -- schemas --write`, but §11.1's command tree defines no `schemas` subcommand | The row now names `scripts/check-schemas.sh [--write]`, which runs the `dump_schema` and `dump_event_schemas` generators and diffs the result against the tree |
 | T-PROV-010 pointed at `ADR-007`, a number that does not exist (§15.6 numbers the ADRs `ADR-0001..0020`), and §4.7 linked no ADR at all | The row now names ADR-0020, and §4.7 links it |
 | §15.6 lists `docs/spec.md` as *this document* while the deliverable lives at `SPEC.md` | Both paths now exist and are byte-identical, enforced by `scripts/lint-docs.sh --check-spec-copy` |
+| §11.8 (the worked example T-CFG-010 runs) sat at the very end of the file, after §16.5's audit result, though §0, §14.3.10 and `docs/config-reference.md` all cite it as §11.8 | Moved to its place between §11.7 and §12 |
+| §3.4 put `Provider` in `cairn-core/src/provider.rs` and `Tool` in `cairn-core/src/tool.rs`, but §3.2 assigns the `Provider` trait to `cairn-provider` and the `Tool` trait to `cairn-tools`, and gives `cairn-core` the dependency row `std, serde, thiserror` — which cannot express the `BoxStream` the same block already returns | The two file-path comments now name `cairn-provider/src/lib.rs` and `cairn-tools/src/lib.rs`; §3.2 is unchanged and `cairn-core` keeps its dependency row |
+| §3.4 declared `Provider::stream`, `Provider::count_tokens` and `Tool::execute` as `async fn`, which is not object-safe — the return type names `Self` — so the registry's `Box<dyn Provider>` and `Arc<dyn Tool>` would not compile | The three signatures now return `futures::future::BoxFuture<'a, …>`, and §3.4 states which traits need boxing and why |
+| D-02 makes one `CancellationToken` tree normative (§3.1, §3.4) but §15.2 listed no crate that provides it, because `tokio` does not | Added the `tokio-util` row (0.7) to §15.2 |
+| §11.7 offers automatic migration on resume "when `migrate.auto = true`", but §11.4.1 — which claims to list every key — had no such key, so `cairn config` would reject it | Added `[migrate] auto = true` to §11.4.1 |
+| `cairn init` is named by P3's zero-config onboarding, §4.10's credentials lookup, §7.3's `.gitignore` rule, REQ-SAFE-003, T-SEC-014 and `cairn doctor`'s "no AGENTS.md found" hint — yet §11.1's command tree had no `init` | Added `cairn init [--global]` to §11.1 as the CLI form of §10.3's `/init`; it ships with M3 alongside `/init` |
+| §11.1 lists `--output` twice with two meanings — the global-flags table defines it as the output format (`text\|json\|stream-json\|tui`, key `output.format`) while the export signature defines it as a destination path, and a command may define only one long name | Both spellings are honoured by one flag: `cairn export` re-reads the global value as a path and excludes it from the `output.format` override for that subcommand only (`output.format` is an enum, so every path would fail with `E-CFG-BADVALUE`); a format spelling at `export` is refused with `E-CLI-USAGE` rather than creating a file called `json`, and the flag's help text states both meanings |
+| `crates/cairn-parse/Cargo.toml` described that crate as "tool-call argument parsers" — §4.3's job, which §3.2 assigns to `cairn-provider` — while §3.2 and §15.1 give it the tree-sitter wrapper | The manifest and the crate docs now read "Tree-sitter wrapper: grammars, queries, syntax validation (SPEC 5.2, 6.3.6, 6.7.4)" |
 
 **Audit result:** all four self-check items pass, and `scripts/lint-docs.sh` verifies the two of them that can be mechanized (requirement→test coverage and error-code registry drift). No requirement lacks a test; no authoritative definition is duplicated with divergent content; every error path has both model-visible and user-visible behavior specified.
-
-
-### 11.8 Configuration precedence example (worked)
-
-Given: default `mode=build`; user config `mode=auto`, `[ui] theme="cairn-light"`; project `.cairn/config.toml` `mode=plan`, `[ui] animation="off"`; env `CAIRN_MODEL=openai/o4-mini`; flag `--mode build`.
-Effective: `mode=build` (flag), `model=openai/o4-mini` (env), `ui.theme=cairn-light` (user), `ui.animation=off` (project). `cairn config list --effective` shows exactly these sources (test T-CFG-010).

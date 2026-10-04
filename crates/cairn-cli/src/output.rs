@@ -90,6 +90,33 @@ impl Fail {
         )
     }
 
+    /// Turn a `CairnError` — a stable `E-*` code plus guidance — into the
+    /// §11.2 exit status the spec pairs with that code.
+    ///
+    /// One mapping, used by every handler that calls into another crate: the
+    /// store knows *what* went wrong, the spec knows *how badly* (REQ-CLI-001).
+    #[must_use]
+    pub fn from_cairn(err: cairn_core::error::CairnError) -> Self {
+        use cairn_core::error::codes;
+        let status = if err.code == codes::SESS_FLUSH {
+            ExitStatus::Flush
+        } else if err.code.starts_with("E-SESS-")
+            || err.code == codes::FS_ENCODING
+            || err.code == codes::FS_NOTFOUND
+            || err.code == codes::FS_NOPARENT
+        {
+            // The resource cannot be used: not found, or present but unreadable.
+            ExitStatus::NotFound
+        } else if err.code == codes::FS_PERM || err.code == codes::FS_READONLY {
+            ExitStatus::Permission
+        } else if err.code == codes::CLI_USAGE {
+            ExitStatus::Usage
+        } else {
+            ExitStatus::Generic
+        };
+        Self::new(err.code, status, err.message, err.recovery)
+    }
+
     /// Interim failure for a command whose milestone has not landed yet.
     #[must_use]
     pub fn not_implemented(feature: &str, milestone: &str) -> Self {

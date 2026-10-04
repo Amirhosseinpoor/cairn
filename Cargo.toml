@@ -20,6 +20,8 @@ thiserror = "2"
 # --- misc (D-01..D-18) ---
 regex = "1"
 globset = "0.4"
+sha2 = "0.10"
+hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 getrandom = "0.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
@@ -33,6 +35,7 @@ toml_edit = "0.22"
 cairn-core = { path = "crates/cairn-core", version = "0.1.0" }
 cairn-eventbus = { path = "crates/cairn-eventbus", version = "0.1.0" }
 cairn-config = { path = "crates/cairn-config", version = "0.1.0" }
+cairn-session = { path = "crates/cairn-session", version = "0.1.0" }
 # --- dev-dependencies ---
 tempfile = "3"
 assert_cmd = "2"

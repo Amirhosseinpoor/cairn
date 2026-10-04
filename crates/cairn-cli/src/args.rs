@@ -40,7 +40,13 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "NAME")]
     pub profile: Option<String>,
 
-    /// Output format: text | json | stream-json | tui — `CAIRN_OUTPUT`.
+    /// Output format: text | json | stream-json | tui — `CAIRN_OUTPUT`; for
+    /// `cairn export` the same flag names the destination path instead.
+    ///
+    /// §11.1 lists `--output` twice — once in the global-flags table (format)
+    /// and once in `cairn export … [--output PATH]` (destination). clap allows
+    /// one long per command, so the export subcommand reads *this* flag back as
+    /// a path rather than declaring a second `--output`.
     #[arg(long, global = true, value_name = "FORMAT")]
     pub output: Option<String>,
 
@@ -120,6 +126,8 @@ pub enum Command {
     Completions(CompletionsArgs),
     /// Force session/config migration.
     Migrate,
+    /// Scaffold AGENTS.md, .cairnignore and .gitignore entries.
+    Init(InitArgs),
 }
 
 /// `cairn run` flags (SPEC §11.1 run table).
@@ -371,10 +379,10 @@ pub struct ExportArgs {
     #[arg(long = "format", value_enum, default_value = "md")]
     pub format: ExportFormat,
 
-    /// Destination path (default: stdout for md/json, required for html).
-    #[arg(long, value_name = "PATH")]
-    pub output: Option<PathBuf>,
-
+    // Destination path: `cairn export --output PATH` (SPEC §11.1). There is no
+    // field for it here — it is the global `--output`, re-read as a path by the
+    // handler. Declaring a second `--output` in this struct makes clap reject
+    // the command tree outright ("Long option names must be unique").
     /// Force redaction on (the default).
     #[arg(long)]
     pub redact: bool,
@@ -403,6 +411,14 @@ pub struct CompletionsArgs {
     /// Target shell.
     #[arg(value_enum)]
     pub shell: clap_complete::Shell,
+}
+
+/// `cairn init [--global]` flags (SPEC §11.1; same scope as §10.3's `/init`).
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Scaffold the user-level `~/.cairn` files instead of this workspace's.
+    #[arg(long)]
+    pub global: bool,
 }
 
 impl Cli {
@@ -440,13 +456,74 @@ mod tests {
             "version",
             "completions",
             "migrate",
+            "init",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "missing subcommand {expected}: {names:?}"
             );
         }
-        assert_eq!(names.len(), 13, "exactly the §11.1 subcommands: {names:?}");
+        assert_eq!(names.len(), 14, "exactly the §11.1 subcommands: {names:?}");
+    }
+
+    /// A hint that tells people to run `cairn <cmd>` must name a command that
+    /// exists. `cairn doctor` has advised running `cairn init` since M0 while
+    /// §11.1 defined no such subcommand — a hint to a command that errors is
+    /// worse than no hint (SPEC §12.3, §16.5).
+    #[test]
+    fn hints_only_name_real_subcommands() {
+        use std::collections::BTreeSet;
+
+        let known: BTreeSet<String> = Cli::command()
+            .get_subcommands()
+            .map(std::string::ToString::to_string)
+            // clap's built-in, which `cairn help …` also dispatches on.
+            .chain(std::iter::once("help".to_string()))
+            .collect();
+
+        let mut files = Vec::new();
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        collect_sources(&src, &mut files);
+
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("readable source");
+            let mut rest = text.as_str();
+            while let Some(pos) = rest.find("`cairn ") {
+                let after = &rest[pos + "`cairn ".len()..];
+                if after.is_empty() {
+                    break;
+                }
+                // `cairn -p …` and `cairn --version` are flags, not commands.
+                let word: String = after
+                    .chars()
+                    .take_while(char::is_ascii_alphabetic)
+                    .collect();
+                if !word.is_empty() {
+                    named.insert(word);
+                }
+                rest = &after[1..];
+            }
+        }
+
+        assert!(!named.is_empty(), "expected at least one hint");
+        let unknown: Vec<&String> = named.iter().filter(|n| !known.contains(*n)).collect();
+        assert!(
+            unknown.is_empty(),
+            "these names appear after `cairn ` in the sources but are not subcommands: {unknown:?} ({})",
+            known.len()
+        );
+    }
+
+    fn collect_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable source dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                collect_sources(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
     }
 
     /// T-CLI-020: `-p` together with `--prompt-file` is a usage error.
@@ -474,6 +551,52 @@ mod tests {
     fn no_subcommand_is_chat() {
         let cli = Cli::try_parse_from(["cairn"]).unwrap();
         assert!(cli.command.is_none());
+    }
+
+    /// `--output` is one flag with two meanings (SPEC §11.1 global table +
+    /// export signature): a format everywhere, a destination path for `export`.
+    /// It must be read from `Cli`, never declared twice — clap refuses a
+    /// command tree with a duplicated long.
+    #[test]
+    fn output_flag_is_a_format_globally_and_a_path_for_export() {
+        let cli = Cli::try_parse_from(["cairn", "run", "-p", "x", "--output", "stream-json"])
+            .expect("global --output parses");
+        assert_eq!(cli.output.as_deref(), Some("stream-json"));
+
+        let cli = Cli::try_parse_from(["cairn", "--output", "json", "chat"]).unwrap();
+        assert_eq!(cli.output.as_deref(), Some("json"));
+
+        let cli = Cli::try_parse_from(["cairn", "export", "ses_01", "--output", "/tmp/s.json"])
+            .expect("export --output parses");
+        assert_eq!(
+            cli.output.as_deref(),
+            Some("/tmp/s.json"),
+            "the destination arrives on the global flag"
+        );
+        let Some(Command::Export(args)) = cli.command else {
+            panic!("expected the export subcommand");
+        };
+        assert_eq!(
+            args.format,
+            ExportFormat::Md,
+            "export's own --format still works"
+        );
+
+        let cli = Cli::try_parse_from(["cairn", "export", "ses_01"]).unwrap();
+        assert!(cli.output.is_none(), "no --output means stdout");
+
+        // The same value must not become the `output.format` override for
+        // `export`: that key is an enum, and would reject every path.
+        let opts = crate::commands::load_options(&cli);
+        assert_eq!(opts.flags.output, None);
+        let cli = Cli::try_parse_from(["cairn", "export", "ses_01", "--output", "s.json"]).unwrap();
+        assert_eq!(crate::commands::load_options(&cli).flags.output, None);
+
+        let cli = Cli::try_parse_from(["cairn", "run", "-p", "x", "--output", "json"]).unwrap();
+        assert_eq!(
+            crate::commands::load_options(&cli).flags.output.as_deref(),
+            Some("json")
+        );
     }
 
     /// `--mode` is free-form at the clap layer so the config layer can list the

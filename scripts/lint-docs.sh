@@ -65,9 +65,10 @@ tids_elsewhere() {
 
 # E-/W- codes documented in the spec body (§0..§15 — §16 quotes codes it is
 # auditing). `E-XXX-YYY` in D-15 shows the *shape* of a code and is
-# deliberately not a code.
+# deliberately not a code; so is a bare area stub such as `E-CTX`, which the
+# requirement of at least one `-<NAME>` segment already excludes.
 codes_in_spec() {
-    spec_body | grep -oE '`[EW]-[A-Z0-9]+-[A-Z0-9_]+`' \
+    spec_body | grep -oE '`[EW]-[A-Z0-9]+(-[A-Z0-9_]+)+`' \
         | tr -d '`' | grep -v '^E-XXX-YYY$' | sort -u
 }
 

@@ -45,12 +45,22 @@ pub fn dispatch(cli: &Cli) -> Result<i32, Fail> {
 
     let loaded = load(&load_options(cli));
 
-    // These two report config problems themselves (they *are* the diagnosis).
+    // These three never sit behind the startup checks. `validate` and `doctor`
+    // *are* the diagnosis; `migrate` exists precisely to repair a config whose
+    // `schema_version` is the thing `validate` rejects as fatal — blocking it
+    // behind that rejection would make it unrunnable on the only files it can
+    // fix (SPEC §11.7.1).
     match &cli.command {
         Some(Command::Config(ConfigCmd::Validate)) => {
             return config::validate_cmd(&loaded, cli.quiet)
         }
         Some(Command::Doctor(args)) => return doctor::run(cli, args, &loaded),
+        Some(Command::Migrate) => {
+            return run::migrate(&Startup {
+                loaded,
+                quiet: cli.quiet,
+            });
+        }
         _ => {}
     }
 
@@ -70,11 +80,12 @@ pub fn dispatch(cli: &Cli) -> Result<i32, Fail> {
         Some(Command::Auth(cmd)) => auth::run(cmd, &startup),
         Some(Command::Mcp(cmd)) => mcp::run(cmd, &startup),
         Some(Command::Update(args)) => run::update(args),
-        Some(Command::Export(args)) => run::export(args, &startup),
-        Some(Command::Migrate) => run::migrate(),
-        Some(Command::Version(_) | Command::Completions(_) | Command::Doctor(_)) => {
-            unreachable!("handled above")
-        }
+        Some(Command::Export(args)) => run::export(cli, args, &startup),
+        Some(Command::Init(args)) => run::init(args),
+        // `Migrate` is handled above, before the startup checks.
+        Some(
+            Command::Version(_) | Command::Completions(_) | Command::Doctor(_) | Command::Migrate,
+        ) => unreachable!("handled above"),
     }
 }
 
@@ -105,11 +116,20 @@ fn validate_static(cli: &Cli) -> Result<(), Fail> {
 /// Command line → loader options (SPEC §11.5 precedence: flags layer).
 pub fn load_options(cli: &Cli) -> LoadOptions {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // `cairn export … --output PATH` (SPEC §11.1 export signature) shares its
+    // spelling with the global `--output` format flag. For that one subcommand
+    // the value is a destination, so it must never reach `output.format` —
+    // which is an enum, and would reject every path with `E-CFG-BADVALUE`.
+    let output = if matches!(cli.command, Some(Command::Export(_))) {
+        None
+    } else {
+        cli.output.clone()
+    };
     let flags = FlagOverrides {
         model: cli.model.clone(),
         mode: cli.mode.clone(),
         profile: cli.profile.clone(),
-        output: cli.output.clone(),
+        output,
         log_level: cli.log_level.clone(),
         log_file: cli.log_file.as_ref().map(|p| p.display().to_string()),
         trace: cli.trace.then_some(true),

@@ -259,6 +259,16 @@
         }
       ]
     },
+    "migrate": {
+      "default": {
+        "auto": true
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/MigrateConfig"
+        }
+      ]
+    },
     "checkpoint": {
       "default": {
         "enabled": true,
@@ -1230,6 +1240,21 @@
         "max_sessions": 500,
         "auto_recover": false,
         "kill_jobs_on_exit": false
+      }
+    },
+    "MigrateConfig": {
+      "description": "`[migrate]` (SPEC §11.4.1).",
+      "type": "object",
+      "properties": {
+        "auto": {
+          "description": "Rewrite an older session on resume, before it is read (SPEC §11.7).",
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "auto": true
       }
     },
     "CheckpointConfig": {
