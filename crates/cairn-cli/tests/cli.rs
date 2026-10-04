@@ -32,11 +32,16 @@ impl Fixture {
     }
 
     fn user_config(&self) -> PathBuf {
-        self.home.join("config/config.toml")
+        // Joined component-wise, not `join("config/config.toml")`: `Path::join`
+        // keeps the separator inside the literal, so on Windows this read
+        // `…\home\config/config.toml` while `cairn config path` printed the
+        // all-backslash form the loader built — two spellings of one file, and
+        // the substring check below missed.
+        self.home.join("config").join("config.toml")
     }
 
     fn project_config(&self) -> PathBuf {
-        self.ws.join(".cairn/config.toml")
+        self.ws.join(".cairn").join("config.toml")
     }
 
     /// A `cairn` invocation isolated from the process environment.
@@ -265,8 +270,15 @@ fn t_cli_021_help_on_every_subcommand() {
             "`cairn {name} --help` must show usage: {text}"
         );
         if name != "help" {
+            // `Usage: cairn <name>` is checked as a line, not a substring:
+            // Windows runs `cairn.exe`, and clap prints the binary it was
+            // invoked as, so the literal spelling only holds on POSIX.
+            let own_usage = text.lines().any(|line| {
+                let line = line.trim();
+                line.starts_with("Usage: cairn") && line.contains(&format!(" {name}"))
+            });
             assert!(
-                text.contains(&format!("Usage: cairn {name}")),
+                own_usage,
                 "`cairn {name} --help` must show its own usage: {text}"
             );
         }

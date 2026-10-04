@@ -194,22 +194,34 @@ mod tests {
         let observed = std::thread::spawn(move || {
             let started = Instant::now();
             while !tool.is_cancelled() {
+                // Only a guard against hanging if `is_cancelled()` never turns
+                // true. It is measured from thread start — which precedes both
+                // `cancel()` and whatever else the runner does to us — so it is
+                // deliberately loose; the assertion that matters is below.
                 assert!(
-                    started.elapsed() < Duration::from_millis(500),
+                    started.elapsed() < Duration::from_secs(5),
                     "executor never saw the cancellation"
                 );
                 // REQ-ARCH-007: poll at least every 100 ms.
                 std::thread::sleep(Duration::from_millis(25));
             }
-            started.elapsed()
+            Instant::now()
         });
 
+        // Give the poller time to enter its loop, then stamp the interval
+        // T-ARCH-007 names: "observe it within 100 ms" counts from the
+        // cancellation, not from thread start. Measuring from spawn charged the
+        // sleep above against the budget and left ~45 ms for the poll plus
+        // scheduler slop, which is how a loop polling every 25 ms reported
+        // 213 ms on a loaded runner.
         std::thread::sleep(Duration::from_millis(30));
+        let cancelled_at = Instant::now();
         root.cancel();
-        let elapsed = observed.join().expect("executor thread");
+        let seen_at = observed.join().expect("executor thread");
+        let elapsed = seen_at.duration_since(cancelled_at);
         assert!(
             elapsed <= Duration::from_millis(100),
-            "executor observed cancellation after {elapsed:?}, budget is 100 ms"
+            "executor observed cancellation {elapsed:?} after it was raised, budget is 100 ms"
         );
     }
 
