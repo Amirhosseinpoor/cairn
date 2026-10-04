@@ -104,7 +104,7 @@ jobs:
           cargo llvm-cov --workspace             --fail-under-lines 80 --summary-only
 
       - name: lcov report (§15.3 "Coverage")
-        run: cargo llvm-cov --workspace --lcov --out lcov.info
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - uses: actions/upload-artifact@v4
         with:

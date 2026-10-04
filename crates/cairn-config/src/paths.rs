@@ -12,7 +12,8 @@ pub struct Paths {
     pub config_home: PathBuf,
     /// `<data home>` — holds `sessions/`, `plans/`.
     pub data_home: PathBuf,
-    /// `<state home>` — holds `logs/`.
+    /// `<state home>` — holds `logs/` on XDG; on macOS/Windows it *is* the
+    /// logs directory §11.6 names (see [`Paths::default_log_file`]).
     pub state_home: PathBuf,
     /// `<cache home>` — holds `index/`, `trace/`, `compiled/`.
     pub cache_home: PathBuf,
@@ -29,6 +30,11 @@ fn home_dir(get: EnvLookup<'_>) -> PathBuf {
     }
 }
 
+/// Only the Linux/BSD arm of [`Paths::resolve`] reads XDG variables (SPEC
+/// §11.6): macOS has `~/Library` and Windows has `%APPDATA%`, so without this
+/// gate the function is dead code — and `cargo build` says so — on the two
+/// platforms where §11.6 does not use it.
+#[cfg(not(any(target_os = "macos", windows)))]
 fn xdg_dir(get: EnvLookup<'_>, var: &str, fallback: &str) -> PathBuf {
     match get(var) {
         Some(v) if !v.is_empty() => PathBuf::from(v),
@@ -55,7 +61,11 @@ impl Paths {
             _ => {
                 #[cfg(target_os = "macos")]
                 {
-                    let support = home_dir(get).join("Library/Application Support");
+                    // SPEC §11.6's macOS column: config and data under
+                    // `~/Library/Application Support`, logs under
+                    // `~/Library/Logs`, cache under `~/Library/Caches`.
+                    let home = home_dir(get);
+                    let support = home.join("Library/Application Support");
                     (
                         support.join("cairn"),
                         support.join("cairn/data"),
@@ -124,9 +134,21 @@ impl Paths {
     }
 
     /// Log file default (SPEC §12.1).
+    ///
+    /// XDG nests it as `<state home>/logs/cairn.log`, but §11.6's macOS and
+    /// Windows rows name a logs *directory* that already carries the `cairn`
+    /// segment (`~/Library/Logs/cairn/`, `%LOCALAPPDATA%\cairn\logs\`), so on
+    /// those two `state_home` is that directory and nothing is appended.
     #[must_use]
     pub fn default_log_file(&self) -> PathBuf {
-        self.state_home.join("logs/cairn.log")
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            self.state_home.join("cairn.log")
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            self.state_home.join("logs/cairn.log")
+        }
     }
 
     /// Trace directory default (SPEC §12.1).
@@ -188,10 +210,28 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn env_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
+        let mut env: BTreeMap<String, String> = pairs
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect()
+            .collect();
+        // §11.6: Windows reads `USERPROFILE` where POSIX reads `HOME`. A
+        // fixture that set only `HOME` would resolve `home_dir` to "." there,
+        // and every `~` assertion below would be about the wrong directory.
+        if let Some(home) = env.get("HOME").cloned() {
+            env.entry("USERPROFILE".to_string()).or_insert(home);
+        }
+        env
+    }
+
+    /// Path equality that ignores the separator. §11.6's table is written
+    /// with `/` while `Path::join` appends `\` on Windows, and `PathBuf`'s
+    /// `PartialEq` compares the raw string — so the two spellings of one
+    /// directory compare unequal. REQ-CLI-008 normalises at the OS boundary;
+    /// this is the test-side equivalent. `Path::components` treats both bytes
+    /// as separators on Windows and neither as special on POSIX, so it needs
+    /// no allocation and no platform `cfg`.
+    fn same_path(a: &Path, b: &Path) -> bool {
+        a.components().eq(b.components())
     }
 
     #[test]
@@ -199,38 +239,54 @@ mod tests {
         let e = env_of(&[("CAIRN_HOME", "/tmp/cairn-home"), ("HOME", "/home/u")]);
         let get = |k: &str| e.get(k).cloned();
         let p = Paths::resolve(&get);
-        assert_eq!(p.config_home, PathBuf::from("/tmp/cairn-home/config"));
-        assert_eq!(p.data_home, PathBuf::from("/tmp/cairn-home/data"));
-        assert_eq!(p.cache_home, PathBuf::from("/tmp/cairn-home/cache"));
-        assert_eq!(
-            p.user_config_file(),
-            PathBuf::from("/tmp/cairn-home/config/config.toml")
-        );
-        assert_eq!(
-            p.sessions_dir(),
-            PathBuf::from("/tmp/cairn-home/data/sessions")
-        );
+        assert!(same_path(
+            &p.config_home,
+            Path::new("/tmp/cairn-home/config")
+        ));
+        assert!(same_path(&p.data_home, Path::new("/tmp/cairn-home/data")));
+        assert!(same_path(&p.cache_home, Path::new("/tmp/cairn-home/cache")));
+        assert!(same_path(
+            &p.user_config_file(),
+            Path::new("/tmp/cairn-home/config/config.toml")
+        ));
+        assert!(same_path(
+            &p.sessions_dir(),
+            Path::new("/tmp/cairn-home/data/sessions")
+        ));
     }
 
+    /// §11.6's Linux column, plus the `XDG_*` variables only that column
+    /// reads. macOS and Windows have their own rows, asserted below.
+    #[cfg(not(any(target_os = "macos", windows)))]
     #[test]
     fn xdg_defaults_on_linux() {
         let e = env_of(&[("HOME", "/home/u")]);
         let get = |k: &str| e.get(k).cloned();
         let p = Paths::resolve(&get);
-        assert_eq!(p.config_home, PathBuf::from("/home/u/.config/cairn"));
-        assert_eq!(p.data_home, PathBuf::from("/home/u/.local/share/cairn"));
-        assert_eq!(p.state_home, PathBuf::from("/home/u/.local/state/cairn"));
-        assert_eq!(p.cache_home, PathBuf::from("/home/u/.cache/cairn"));
-        assert_eq!(
-            p.default_log_file(),
-            PathBuf::from("/home/u/.local/state/cairn/logs/cairn.log")
-        );
-        assert_eq!(
-            p.default_trace_dir(),
-            PathBuf::from("/home/u/.cache/cairn/trace")
-        );
+        assert!(same_path(
+            &p.config_home,
+            Path::new("/home/u/.config/cairn")
+        ));
+        assert!(same_path(
+            &p.data_home,
+            Path::new("/home/u/.local/share/cairn")
+        ));
+        assert!(same_path(
+            &p.state_home,
+            Path::new("/home/u/.local/state/cairn")
+        ));
+        assert!(same_path(&p.cache_home, Path::new("/home/u/.cache/cairn")));
+        assert!(same_path(
+            &p.default_log_file(),
+            Path::new("/home/u/.local/state/cairn/logs/cairn.log")
+        ));
+        assert!(same_path(
+            &p.default_trace_dir(),
+            Path::new("/home/u/.cache/cairn/trace")
+        ));
     }
 
+    #[cfg(not(any(target_os = "macos", windows)))]
     #[test]
     fn xdg_env_overrides() {
         let e = env_of(&[
@@ -240,9 +296,72 @@ mod tests {
         ]);
         let get = |k: &str| e.get(k).cloned();
         let p = Paths::resolve(&get);
-        assert_eq!(p.config_home, PathBuf::from("/custom/cfg/cairn"));
-        assert_eq!(p.cache_home, PathBuf::from("/custom/cache/cairn"));
-        assert_eq!(p.data_home, PathBuf::from("/home/u/.local/share/cairn"));
+        assert!(same_path(&p.config_home, Path::new("/custom/cfg/cairn")));
+        assert!(same_path(&p.cache_home, Path::new("/custom/cache/cairn")));
+        assert!(same_path(
+            &p.data_home,
+            Path::new("/home/u/.local/share/cairn")
+        ));
+    }
+
+    /// §11.6's macOS column.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_defaults_match_section_11_6() {
+        let e = env_of(&[("HOME", "/Users/u")]);
+        let get = |k: &str| e.get(k).cloned();
+        let p = Paths::resolve(&get);
+        assert!(same_path(
+            &p.config_home,
+            Path::new("/Users/u/Library/Application Support/cairn")
+        ));
+        assert!(same_path(
+            &p.data_home,
+            Path::new("/Users/u/Library/Application Support/cairn/data")
+        ));
+        assert!(same_path(
+            &p.state_home,
+            Path::new("/Users/u/Library/Logs/cairn")
+        ));
+        assert!(same_path(
+            &p.cache_home,
+            Path::new("/Users/u/Library/Caches/cairn")
+        ));
+        assert!(same_path(
+            &p.default_log_file(),
+            Path::new("/Users/u/Library/Logs/cairn/cairn.log")
+        ));
+        assert!(same_path(
+            &p.default_trace_dir(),
+            Path::new("/Users/u/Library/Caches/cairn/trace")
+        ));
+    }
+
+    /// §11.6's Windows column.
+    #[cfg(windows)]
+    #[test]
+    fn windows_defaults_match_section_11_6() {
+        let e = env_of(&[
+            ("HOME", r"C:\Users\u"),
+            ("APPDATA", r"C:\Users\u\AppData\Roaming"),
+            ("LOCALAPPDATA", r"C:\Users\u\AppData\Local"),
+        ]);
+        let get = |k: &str| e.get(k).cloned();
+        let p = Paths::resolve(&get);
+        let roaming = PathBuf::from(r"C:\Users\u\AppData\Roaming");
+        let local = PathBuf::from(r"C:\Users\u\AppData\Local");
+        assert!(same_path(&p.config_home, &roaming.join("cairn")));
+        assert!(same_path(&p.data_home, &local.join("cairn").join("data")));
+        assert!(same_path(&p.state_home, &local.join("cairn").join("logs")));
+        assert!(same_path(&p.cache_home, &local.join("cairn").join("cache")));
+        assert!(same_path(
+            &p.default_log_file(),
+            &p.state_home.join("cairn.log")
+        ));
+        assert!(same_path(
+            &p.default_trace_dir(),
+            &p.cache_home.join("trace")
+        ));
     }
 
     #[test]
@@ -253,20 +372,20 @@ mod tests {
         std::fs::create_dir_all(tmp.join(".git")).unwrap();
         let e = env_of(&[]);
         let get = |k: &str| e.get(k).cloned();
-        assert_eq!(discover_workspace(&nested, None, &get), tmp);
+        assert!(same_path(&discover_workspace(&nested, None, &get), &tmp));
 
         // explicit beats everything
-        assert_eq!(
-            discover_workspace(&nested, Some(Path::new("/explicit")), &get),
-            PathBuf::from("/explicit")
-        );
+        assert!(same_path(
+            &discover_workspace(&nested, Some(Path::new("/explicit")), &get),
+            Path::new("/explicit")
+        ));
         // env beats git discovery
         let e2 = env_of(&[("CAIRN_WORKSPACE", "/from-env")]);
         let get2 = |k: &str| e2.get(k).cloned();
-        assert_eq!(
-            discover_workspace(&nested, None, &get2),
-            PathBuf::from("/from-env")
-        );
+        assert!(same_path(
+            &discover_workspace(&nested, None, &get2),
+            Path::new("/from-env")
+        ));
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -275,7 +394,13 @@ mod tests {
         assert!(is_abs_or_tilde(""));
         assert!(is_abs_or_tilde("~/logs/x.log"));
         assert!(is_abs_or_tilde("~"));
+        // §11.4.2 says "absolute", and that word is platform-relative: a
+        // Windows path needs a drive prefix, so `/var/log/x` is absolute on
+        // the POSIX arm only.
+        #[cfg(unix)]
         assert!(is_abs_or_tilde("/var/log/x"));
+        #[cfg(windows)]
+        assert!(is_abs_or_tilde(r"C:\var\log\x"));
         assert!(!is_abs_or_tilde("relative/path"));
         assert!(!is_abs_or_tilde("x.log"));
     }
@@ -284,8 +409,11 @@ mod tests {
     fn tilde_expansion() {
         let e = env_of(&[("HOME", "/home/u")]);
         let get = |k: &str| e.get(k).cloned();
-        assert_eq!(expand_tilde("~/a/b", &get), PathBuf::from("/home/u/a/b"));
-        assert_eq!(expand_tilde("~", &get), PathBuf::from("/home/u"));
-        assert_eq!(expand_tilde("/abs", &get), PathBuf::from("/abs"));
+        assert!(same_path(
+            &expand_tilde("~/a/b", &get),
+            Path::new("/home/u/a/b")
+        ));
+        assert!(same_path(&expand_tilde("~", &get), Path::new("/home/u")));
+        assert!(same_path(&expand_tilde("/abs", &get), Path::new("/abs")));
     }
 }

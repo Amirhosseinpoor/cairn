@@ -9,6 +9,11 @@ use crate::args::AuthCmd;
 use crate::commands::Startup;
 use crate::output::Fail;
 use cairn_config::bundled_registry;
+// Only the POSIX arm reads `codes`: `harden` is `#[cfg(unix)]` (SPEC
+// REQ-PROV-015's `0600`) and the one other use is inside `mod tests`, so
+// without this gate `cargo build` on Windows finds the import dead and
+// `clippy -D warnings` would fail there.
+#[cfg(any(unix, test))]
 use cairn_core::error::codes;
 use std::path::Path;
 

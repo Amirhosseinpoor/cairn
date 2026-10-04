@@ -1,0 +1,14 @@
+# The working tree has to be LF for two reasons.
+#
+# 1. Byte comparisons against generated output: `t_schema_002_event_schemas`
+#    and `t_schema_003_config_schema_matches_structs` diff committed schemas
+#    against what the Rust types emit (REQ-ARCH-009), `scripts/check-schemas.sh`
+#    and `scripts/lint-docs.sh --check-spec-copy` diff whole files, and a
+#    CRLF checkout fails every one of them on Windows alone.
+# 2. Shell: `scripts/*.sh` and `rust-toolchain.toml` must keep LF or they stop
+#    running outside bash.
+#
+# `text=auto` leaves binaries alone; `eol=lf` then pins the text ones on
+# checkout, on every platform and whatever a contributor's `core.autocrlf`
+# says. It beats the user's config because .gitattributes in the repo wins.
+* text=auto eol=lf

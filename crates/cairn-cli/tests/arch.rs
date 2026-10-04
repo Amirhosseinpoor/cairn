@@ -515,18 +515,9 @@ fn t_schema_002_event_schemas() {
          `cargo run -p cairn-core --example dump_event_schemas`"
     );
 
-    let differs: Vec<&str> = generated
-        .iter()
-        .filter(|(name, body)| committed.get(*name).map(String::as_str) != Some(body.as_str()))
-        .map(|(name, _)| name.as_str())
-        .collect();
-    assert!(
-        differs.is_empty(),
-        "T-SCHEMA-002/REQ-ARCH-009: schemas/events is stale for {differs:?} — \
-         run `cargo run -p cairn-core --example dump_event_schemas`"
-    );
-
-    // Every file is a schema, not just a blob that happens to match.
+    // Every file is a schema, not just a blob that happens to match — parsed
+    // first so a truncated or hand-edited file names itself instead of dying
+    // inside the comparison below.
     for (name, body) in &committed {
         let v: serde_json::Value =
             serde_json::from_str(body).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -536,6 +527,25 @@ fn t_schema_002_event_schemas() {
         );
         assert_eq!(v["type"], "object", "{name}");
     }
+
+    // Compare parsed JSON rather than bytes. A Windows checkout can carry CRLF
+    // in these files while the generator always emits LF, and byte equality
+    // would then report all 33 as stale — the drift REQ-ARCH-009 cares about
+    // is in the schema, not the line endings. Same rule as T-SCHEMA-003 below.
+    let differs: Vec<&str> = generated
+        .iter()
+        .filter(|(name, body)| {
+            committed
+                .get(*name)
+                .is_some_and(|c| normalize(c) != normalize(body))
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert!(
+        differs.is_empty(),
+        "T-SCHEMA-002/REQ-ARCH-009: schemas/events is stale for {differs:?} — \
+         run `cargo run -p cairn-core --example dump_event_schemas`"
+    );
 }
 
 /// T-SCHEMA-003 — the committed config schema is byte-for-byte what the
