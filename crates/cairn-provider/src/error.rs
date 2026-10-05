@@ -180,6 +180,33 @@ impl ProviderFault {
             SseError::Cancelled => Self::Cancelled,
         }
     }
+
+    /// §4.5's first column, which is written as statuses before it is written
+    /// as anything else — so the mapping sits beside the table rather than
+    /// inside each adapter that has to apply it.
+    ///
+    /// `None` for a 2xx: there is no fault to report. The two 400s the spec
+    /// singles out (context length, content filter) are told apart by the
+    /// response *message*, never by the status, so every 400 comes back as
+    /// [`ProviderFault::BadRequest`] and the caller refines it where it still
+    /// has the body to read.
+    #[must_use]
+    pub const fn from_status(status: u16) -> Option<Self> {
+        match status {
+            200..=299 => None,
+            401 => Some(Self::Auth),
+            403 => Some(Self::Forbidden),
+            404 => Some(Self::NoModel),
+            408 => Some(Self::Timeout),
+            413 => Some(Self::PayloadTooLarge),
+            429 => Some(Self::RateLimited),
+            400..=499 => Some(Self::BadRequest),
+            500..=599 => Some(Self::Server),
+            // 1xx, 3xx, and anything outside the status-code space: §4.5's
+            // "1xx / invalid status line" row.
+            _ => Some(Self::Protocol),
+        }
+    }
 }
 
 impl fmt::Display for ProviderFault {

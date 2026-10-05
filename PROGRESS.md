@@ -8,8 +8,9 @@ M0 remains green; every gate below is re-run after each M1 change. M1 currently 
 session store (`cairn-session`) with the three commands built on it (`sessions`, `export`,
 `migrate`), the hand-written SSE parser (`cairn-sse`, D-04), and `cairn-provider`'s boxed
 `Provider` trait with the §4.5 taxonomy as data, the §4.5 retry policy (`cairn-provider::retry`)
-as pure, testable values, and §4.8/§4.9's registry and cost accounting — see
-[M1 progress](#m1-progress).
+as pure, testable values, §4.8/§4.9's registry and cost accounting, and the per-adapter wire
+decoder (`cairn-provider::wire`: §4.2's three stream shapes into §3.4's `StreamEvent`s) — see
+[M1 progress](#m1-progress). CI is green on all three OSes plus lint, coverage and MSRV.
 
 ### Gates (re-run after any change)
 
@@ -18,8 +19,8 @@ as pure, testable values, and §4.8/§4.9's registry and cost accounting — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **321 passed, 0 failed, 0 warnings** |
-| MSRV | `cargo +1.83.0 test --workspace` | 321 passed (D-01 / `rust-version`) |
+| Tests | `cargo test --workspace` | **338 passed, 0 failed, 0 warnings** |
+| MSRV | `cargo +1.83.0 test --workspace` | 338 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
 | Advisories | `cargo audit` | 0 vulnerabilities in 154 crates |
@@ -54,11 +55,11 @@ as pure, testable values, and §4.8/§4.9's registry and cost accounting — see
 | `cairn-eventbus` | 6 |
 | `cairn-session` (M1) | 44 |
 | `cairn-sse` (M1) | 23 |
-| `cairn-provider` (M1) | 38 |
+| `cairn-provider` (M1) | 55 |
 | `cairn-cli` unit | 43 |
 | `cairn-cli` integration (`cli.rs`) | 33 |
 | `cairn-cli` architecture (`arch.rs`) | 12 |
-| **Total** | **321** |
+| **Total** | **338** |
 
 ### Documentation deliverables (§15.6)
 
@@ -90,6 +91,7 @@ as pure, testable values, and §4.8/§4.9's registry and cost accounting — see
 | `cairn-provider::retry` — §4.5's backoff formula as `delay_bounds`, `Retry-After` (seconds *and* HTTP-date), the 180 s `RetryBudget`, and an RNG that point ranges never reach | done (M1) | §4.5, REQ-PROV-005, T-PROV-005, T-PROV-040 |
 | `cairn-core::registry` — §4.9's `models.json` parsed once (two consumers that may import only `core`), embedded at compile time, with alias resolution and `auth_header` split into name + prefix | done (M1) | §4.9, REQ-PROV-013, T-PROV-013 |
 | `cairn-provider::accounting` — §4.8's estimator (the branch predicate §4.8 named but did not state), `estimate_request`, and REQ-PROV-012's cost formula with `null` for an unpriced model | done (M1) | §4.8, REQ-PROV-012 |
+| `cairn-provider::wire` — `WireDecoder` turns one provider's payloads (SSE `data` for Anthropic/`OpenAI`, one NDJSON line for Ollama) into §3.4's `StreamEvent`s | done (M1) | T-PROV-001, T-PROV-025, T-PROV-026, T-PROV-028, T-PROV-029, T-PROV-035, §4.2, §4.3, §4.4 |
 | `cairn-cli`: `sessions` on the real store, `export`, `migrate`, `resume <id>` load check | done (M1) | T-CLI-015, T-SEC-012 |
 | `cairn-tui`: slash-command registry (§10.3, REQ-TUI-004) | done | T-CLI-003 |
 | Stub crates for all 19 workspace members (compile + document boundaries) | done | T-ARCH-001, T-ARCH-003 |
@@ -144,6 +146,7 @@ testable — including the command `cairn doctor` points people at.
 | `registry.resolve_id` in `cairn-config::validate` — `model = "sonnet"` reached `E-CFG-NOMODEL` because only canonical ids were compared, and the `max_output` lookup keyed on the raw string would have missed too; both now go through the alias, so an alias validates *and* carries its canonical limits | done | REQ-PROV-013, T-CFG-007 |
 | `models_path` read at load — the key was specified in §4.9 and §11.4.1 and read by nothing. An unusable override now warns `W-REG-FALLBACK` (a code that was registered and tested but emitted by no path) and falls back to the bundle, §11.4.2's absolute-or-`~` rule reaches it, and `cairn config set models_path …` refuses a value the next startup would discard | done | §4.9, REQ-PROV-014, T-PROV-014 |
 | `cairn-provider::accounting` — `estimate_tokens` applies §4.8's two formulas with the predicate the section named but never stated, `estimate_request` sums messages and tool schemas, and `cost_usd` returns REQ-PROV-012's formula as `Option<f64>` (`null` when §4.9's price is `null`, never `0.0`); `Capabilities::from_entry` is T-PROV-003's "equals the registry row" | done | §4.8, REQ-PROV-011, REQ-PROV-012 |
+| `cairn-provider::wire` — per-adapter wire decoder (§4.2's three stream shapes → §3.4's `StreamEvent`s): `Finish` only from `finish()` so `Usage` precedes it, one merged `Usage` only when the provider's numbers are complete, §4.3's ≥ 5 malformed abort with keep-alive and `[DONE]` uncounted, synthetic `ToolCallStart` (`synthetic-{index}`, empty name) for unknown indices, EndTurn→ToolUse when tools were seen (§4.4 row 6, both directions), no `ToolCallEnd`/`Finish` for a cut stream; `ProviderFault::from_status` maps numeric in-band codes; `ReasoningSignature` feeds §4.1's `Block::Reasoning.signature`; Responses API (`response.output_text.delta`) recorded outstanding | done | T-PROV-001, T-PROV-025, T-PROV-026, T-PROV-028, T-PROV-029, T-PROV-035, §4.2, §4.3, §4.4 |
 
 ### Decisions taken while landing the session store
 
@@ -247,13 +250,22 @@ own: a section that claims completeness, and does not have it.
     REQ-PROV-014/§11.4.2 follow. The registry document itself moved to `cairn-core::registry` —
     §3.2 gives `cairn-provider` `registry` in its MAY list, naming no crate, while both consumers
     can reach `core` — so §3.2's responsibility columns changed and `registry` left that list.
+19. **§4.1's `Block::Reasoning.signature` had no producer; §4.3's assembly had no empty-buffer,
+    synthetic-id/name, `Usage`-before-`Finish`, keep-alive, or cut-stream rule; §4.4's "Stop on
+    tool" row read as request shaping only; §4.2 listed the Responses API with no shaping row**
+    → §3.4's `StreamEvent` gains `ReasoningSignature`; §4.3 now states empty-buffer-parses-as-`{}`,
+    the `synthetic-{index}`/empty-name rule, `Usage`-when-complete with `Finish`-only-at-end-of-stream,
+    blank-`data:`-as-keep-alive, and no-`ToolCallEnd`-no-`Finish` for a cut stream; §4.4's row 6
+    reads in both directions (plain stop + tools seen ⇒ `ToolUse`); the Responses API stays listed
+    but marked not decoded in M1. Implemented as `cairn-provider::wire::WireDecoder`.
 
 ## Known limitations of the M0 delivery
 
-- **CI is written, not yet exercised.** `.github/workflows/ci.yml` mirrors §14.7's `lint`, `unit-int`
-  (3 OS) and `coverage` rows; only the Linux leg has been run locally. The macOS/Windows legs and the
-  third-party actions (`taiki-e/install-action`, `Swatinem/rust-cache`, `rustsec/audit-check`) are
-  unverified until a runner picks them up.
+- **CI is green on all three OSes.** `.github/workflows/ci.yml` mirrors §14.7's `lint`, unit
+  (ubuntu/macOS/Windows), `coverage` and `msrv` rows; the early M1 pushes were red on
+  macOS/Windows/coverage for pre-existing reasons (CRLF schema diff, two POSIX-only path
+  tests, `llvm-cov --out`, a macOS compile error in `paths.rs`) and are fixed — six jobs
+  green, and every push is verified with the CI watcher before the next chunk lands.
 - **Branch coverage is enforced only as LLVM regions.** §14.7 sets both line and branch targets;
   `cargo llvm-cov --branch` is unstable on this toolchain, so the numbers above come from the
   default summary (line / region / function). The CI gate runs `--fail-under-lines` on lines only.
@@ -300,7 +312,12 @@ Next, in order:
 
 1. **The five adapters** (§4.4 shaping over the landed trait): Anthropic, OpenAI, an
    OpenAI-compatible proxy, Ollama (NDJSON, §4.2 row 2) and vLLM — each reporting
-   `ProviderHealth` from `health()` without touching the network.
+   `ProviderHealth` from `health()` without touching the network. Each adapter is thin
+   framing + `cairn-provider::wire::WireDecoder` (landed): the payload extraction lives
+   in the adapter, the event mapping does not move. The reqwest transport step MUST
+   resolve the D-04 vs §15.2 contradiction first: D-04 says rustls with *no default
+   roots → bundled Mozilla roots*, §15.2's `rustls-native-certs` row says *native roots*
+   with `ca_bundle` override — one of the two rows changes before the first socket opens.
 2. **The §4.5 retry loop** — the *policy* is landed (`cairn-provider::retry`: `delay_bounds`,
    `Retry-After` in seconds and HTTP-date, the 120 s cap, `RetryBudget`, cancellation-shaped
    point ranges), what is missing is the `while` that drives it around a `Provider::stream` and

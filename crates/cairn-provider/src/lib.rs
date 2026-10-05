@@ -4,17 +4,20 @@
 //! so the registry can hold `Box<dyn Provider>`. What lives beside it here is
 //! the vocabulary every adapter speaks — [`StreamEvent`] for the wire, the
 //! §4.9 [`ProviderId`], and [`ProviderFault`], which turns §4.5's retry matrix
-//! into values instead of five copies of the same `match`.
+//! into values instead of five copies of the same `match`. [`WireDecoder`] is
+//! §4.2's per-adapter framing rule and §4.3's streaming contract as one type:
+//! an adapter hands it a payload and gets §3.4's events back.
 //!
 //! Delivered in milestone **M1** (SPEC §15.4): the trait, §4.5's taxonomy and
-//! retry policy, and §4.8/§4.9's registry and cost accounting are in place;
-//! what is left is the five adapters, the retry loop, and the mock provider
-//! with its cassettes.
+//! retry policy, §4.8/§4.9's registry and cost accounting, and the wire
+//! decoder are in place; what is left is the five adapters on top of it, the
+//! retry loop, and the mock provider with its cassettes.
 
 mod accounting;
 mod error;
 mod retry;
 mod types;
+mod wire;
 
 pub use accounting::{cost_usd, estimate_request, estimate_tokens};
 pub use error::{Backoff, ProviderError, ProviderFault, ALL_FAULTS};
@@ -24,6 +27,7 @@ pub use retry::{
 pub use types::{
     Capabilities, ModelRequest, ProviderHealth, ProviderId, StreamEvent, TokenCount, ToolSpec,
 };
+pub use wire::WireDecoder;
 
 use cairn_core::cancel::CancellationToken;
 use futures::future::BoxFuture;

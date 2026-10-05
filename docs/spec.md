@@ -428,6 +428,7 @@ pub enum StreamEvent {
     MessageStart { model: String, id: String },
     TextDelta { text: String },
     ReasoningDelta { text: String },
+    ReasoningSignature { signature: String },   // Anthropic `signature_delta`: echoed back next turn (§4.2)
     ToolCallStart { index: u32, id: String, name: String },
     ToolCallDelta { index: u32, args_delta: String },
     ToolCallEnd { index: u32 },
@@ -652,6 +653,8 @@ Serialization to storage uses snake_case JSON; adapters map to wire formats.
 - REQ-PROV-003: Every adapter MUST publish `Capabilities`; the context builder MUST branch on capabilities, never on provider name.
 - REQ-PROV-004: Prompt-based tool calling fallback MUST be implemented for any adapter with `tool_calling == false` (exact format in §4.6).
 
+The Streaming row names the Responses API (`response.output_text.delta`) alongside `delta`, but it has no §4.4 shaping row and `cairn-provider` does not decode it in M1 — outstanding, recorded in §16.5.
+
 ### 4.3 Streaming: SSE contract
 
 **Parser rules (`cairn-sse`):**
@@ -663,9 +666,11 @@ Serialization to storage uses snake_case JSON; adapters map to wire formats.
 6. At end of stream the parser MUST still dispatch a pending event carrying at least one `data:` line or an `event:` name, and MUST emit an unterminated final line as it stands. A server that omits the final blank line would otherwise lose `[DONE]` or `message_stop`; the WHATWG algorithm discards both, §4.3 deliberately does not.
 
 **Partial JSON tool-argument assembly:**
-- Arguments accumulate into a per-`index` buffer; Cairn does **not** parse incrementally for execution. On `ToolCallEnd`, run `serde_json::from_str`.
+- Arguments accumulate into a per-`index` buffer; Cairn does **not** parse incrementally for execution. On `ToolCallEnd`, run `serde_json::from_str`. An empty buffer parses as `{}` — a tool call with no arguments is the normal case, not a parse failure.
 - If parsing fails: attempt repair in order (a) close unbalanced braces/brackets up to depth 8, (b) strip trailing comma, (c) replace literal `NaN`/`Infinity` with `null`. Re-parse. If still failing → tool call is emitted with `parse_error` set; the model receives a tool result `E-TOOL-BADJSON` (§6.5) instead of execution.
-- Deltas for an unknown `index` MUST open a synthetic `ToolCallStart` (tolerant of providers that omit it).
+- Deltas for an unknown `index` MUST open a synthetic `ToolCallStart` (tolerant of providers that omit it): id `synthetic-{index}`, name empty — nothing in the stream has said it yet.
+- Ordering: `Usage` is emitted when the provider's numbers are complete (REQ-PROV-011); `Finish` is produced only at end of stream, so `Usage` always precedes `Finish` — the OpenAI `include_usage` chunk arrives *after* `finish_reason`, which is why `Finish` cannot be emitted when the reason arrives.
+- A stream cut before any completion signal emits neither `ToolCallEnd` for its open calls (an unfinished argument buffer must never reach `from_str`, REQ-PROV-009) nor `Finish`: the turn did not end.
 
 **Malformed-chunk recovery:**
 | Condition | Action |
@@ -674,6 +679,7 @@ Serialization to storage uses snake_case JSON; adapters map to wire formats.
 | Line not `field: value` | ignore line |
 | Unknown `event:` name | ignore event, keep stream |
 | JSON parse failure of `data` (non-tool) | drop event, count `malformed_events`; if ≥ 5 in one stream → `E-PROV-MALFORMED` abort |
+| Blank `data:` line | keep-alive, not a message: ignored and never counted toward `malformed_events` |
 | Heartbeat comment `: ping` | reset idle timer |
 
 **Idle timeout:** no bytes for **45 s** (`providers.<id>.idle_timeout_ms = 45000`) → abort with `E-PROV-IDLE`, retryable (it counts toward §4.5's retry budget).
@@ -690,6 +696,8 @@ Serialization to storage uses snake_case JSON; adapters map to wire formats.
 | Max tokens | `max_tokens` required | `max_tokens`/`max_completion_tokens` | `options.num_predict` | `max_tokens` |
 | Temperature | `temperature` | `temperature` | `options.temperature` | `temperature` |
 | Stop on tool | `stop_reason: tool_use` | `finish_reason: tool_calls` | done + call field | same as OpenAI |
+
+The "Stop on tool" row is read in both directions: a stream that carried tool calls but reports a plain stop (`EndTurn` — Ollama's `done_reason: "stop"` even after a call, or a proxy that never says `tool_calls`) decodes as `ToolUse`.
 
 ### 4.5 Error taxonomy and retry matrix
 
@@ -4393,4 +4401,5 @@ Every error code in §14.3.2b defines: (a) **model-visible** behavior (`ok:false
 | §4.5's matrix column was headed **Attempts**, while `E-PROV-MALFORMED`'s own note read "After 1 retry → fatal", §11.4.1's knob was `max_retries = 5`, and §4.5's own formula ran `n = 1..5` — so the same number was a retry count in two places and an attempt count in a third, T-PROV-005's "5 attempts" disagreed with T-PROV-040's "5-attempt budget", and §10.1/§10.9's status line read `attempt 2/5` against a column that counted retries | Column renamed to **Retries** — the number of backoffs, so a call makes one HTTP request more than that — with D-05 and the T-PROV-005/040/046 rows reworded to match. The status line now reads `retry 1/5`, which is what the first backoff actually is and what `max_retries` names. `model.error`'s `attempt` field keeps its name: it counts HTTP requests, which is what the field says |
 | §15.4's milestone rows are contiguous spans over each family's numbering *block*, so M1's exit criteria claimed `T-PROV-001..048` (015–019 have no definition row), `T-SESS-010..031` (014–019 and 024–029 have none), `T-SEC-001..003` (001 is referenced by REQ-SAFE-010 but defined nowhere, 003 does not occur in the document at all) and `T-ARCH-005..010` (009/010 likewise) — while §0 says a range "enumerates each integer as an individual case", so four of M1's criteria could never have been satisfied | M1's row now spans only ids that have a definition: `T-PROV-001..014, T-PROV-020..048, T-FAULT-001..006, T-SESS-010..013, T-SESS-020..023, T-SESS-030..031, T-CLI-010..017, T-SEC-002, T-ARCH-005..008`. The same overrun exists in the M0 and M2–M5 rows (`T-CFG-022..029`, `T-TOOL-018..100`, `T-CMD-057..099`, `T-PERM-014..019`, `T-PERF-001..004`, `T-OPS-013..019`, …); those stay as blocks because their milestones have not started — narrowing one is part of executing that milestone, and this row records it rather than a rule that would silently rewrite five rows at once. `T-SEC-001` remains referenced but undefined for the same reason (M2) |
 | §4.8 named its two estimator branches "Latin" and "CJK/code-heavy" without saying how to tell them apart, so any implementation picks a rule the section does not state; §4.9 defined `aliases` but never said a `model` value could be one, leaving REQ-PROV-013 to compare canonical ids only and reject `model = "sonnet"` with `E-CFG-NOMODEL`; §4.9's `auth_header` is a bare string the bundled registry fills with two different shapes (`"Authorization: Bearer"` and Anthropic's bare `"x-api-key"`) with no rule for reading them; and REQ-PROV-014 mandated a fallback while naming no warning, so `W-REG-FALLBACK` existed only in a test row and in `error.rs`, emitted by nothing | §4.8 now states the predicate — ASCII and ≥ 80% letters/digits/spaces ⇒ `ceil(chars/4)`, otherwise `ceil(bytes/3)` — and what a whole-prompt estimate does and does not count. §4.9 now says a `model` MAY be an id or an alias, resolving *before* limits are read, with REQ-PROV-013 and §11.4.2 following; `auth_header` is documented as `name[: prefix]` split on the first `:`; REQ-PROV-014 names `W-REG-FALLBACK` for both the bundled-copy case and an unusable `models_path`. The registry document itself moved to `cairn-core::registry` — it has two consumers (`cairn-config` for REQ-PROV-013, `cairn-provider` for §4.2/§4.8/§4.9) that may import only `core` (§3.2), and two parsers of one shipped file is how a model comes to validate and then fail to call — so §3.2's `cairn-core` responsibility column gained it and `registry` left `cairn-provider`'s MAY list, which named no crate |
+| §4.1's `Block::Reasoning.signature` had no producer — nothing on the wire could fill it, since §3.4's `StreamEvent` had `ReasoningDelta` for the text and no event for Anthropic's `signature_delta`; §4.3's assembly ran `serde_json::from_str` on `ToolCallEnd` with no rule for an empty buffer (every no-argument tool would fail it), mandated a synthetic `ToolCallStart` with no id/name rule, said nothing about `Usage`-before-`Finish` ordering (which the OpenAI `include_usage`-after-`finish_reason` order breaks if `Finish` is emitted eagerly) or about a blank `data:` line (keep-alive, not damage), and stopped every stream at a missing completion signal without saying the turn then has no `Finish`; §4.4's "Stop on tool" row was written as request shaping only, leaving Ollama's `done_reason: "stop"` after a tool call unmapped; §4.2's Streaming row lists the Responses API with no §4.4 shaping row behind it | §3.4's `StreamEvent` gains `ReasoningSignature`, fed by §4.2's `signature_delta`. §4.3 now states: an empty buffer parses as `{}`; the synthetic start carries id `synthetic-{index}` with the name left empty; `Usage` is emitted when complete and `Finish` only at end of stream; a blank `data:` line is ignored and never counted toward `malformed_events`; a stream cut before any completion signal emits neither `ToolCallEnd` nor `Finish`. §4.4's row 6 is read in both directions — plain stop plus tool calls seen ⇒ `ToolUse`. The Responses API stays listed in §4.2 but marked not decoded in M1. `cairn-provider::wire::WireDecoder` implements all of it (T-PROV-001/025/026/028/029, T-PROV-035) |
 **Audit result:** all four self-check items pass, and `scripts/lint-docs.sh` verifies the two of them that can be mechanized (requirement→test coverage and error-code registry drift). No requirement lacks a test; no authoritative definition is duplicated with divergent content; every error path has both model-visible and user-visible behavior specified.

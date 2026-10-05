@@ -150,6 +150,13 @@ pub enum StreamEvent {
     ReasoningDelta {
         text: String,
     },
+    /// §4.2's Anthropic column: a `thinking` block carries a `signature` the
+    /// API wants echoed back on the next turn, so it cannot ride inside
+    /// [`Self::ReasoningDelta`] — the deltas stream and the signature is one
+    /// value. §4.1's `Block::Reasoning.signature` had no other producer.
+    ReasoningSignature {
+        signature: String,
+    },
     ToolCallStart {
         index: u32,
         id: String,
