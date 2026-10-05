@@ -31,6 +31,8 @@ rand = "0.8"
 clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4.5"
 toml_edit = "0.22"
+# --- http (D-04: reqwest 0.12, rustls with bundled Mozilla roots, no openssl) ---
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "stream", "gzip", "http2"] }
 # --- internal crates ---
 # `version` is required alongside `path` so cargo-deny can resolve the entry
 # (a path-only workspace dependency reads as a `*` wildcard, which the D-13

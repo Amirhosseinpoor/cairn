@@ -8,8 +8,10 @@ M0 remains green; every gate below is re-run after each M1 change. M1 currently 
 session store (`cairn-session`) with the three commands built on it (`sessions`, `export`,
 `migrate`), the hand-written SSE parser (`cairn-sse`, D-04), and `cairn-provider`'s boxed
 `Provider` trait with the §4.5 taxonomy as data, the §4.5 retry policy (`cairn-provider::retry`)
-as pure, testable values, §4.8/§4.9's registry and cost accounting, and the per-adapter wire
-decoder (`cairn-provider::wire`: §4.2's three stream shapes into §3.4's `StreamEvent`s) — see
+as pure, testable values, §4.8/§4.9's registry and cost accounting, the per-adapter wire
+decoder (`cairn-provider::wire`: §4.2's three stream shapes into §3.4's `StreamEvent`s),
+the §4.3 transport (D-04 `reqwest` client, status mapping, SSE/NDJSON framing into the
+decoder), and the five §4.4 adapters with non-network `health()` — see
 [M1 progress](#m1-progress). CI is green on all three OSes plus lint, coverage and MSRV.
 
 ### Gates (re-run after any change)
@@ -19,8 +21,8 @@ decoder (`cairn-provider::wire`: §4.2's three stream shapes into §3.4's `Strea
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **338 passed, 0 failed, 0 warnings** |
-| MSRV | `cargo +1.83.0 test --workspace` | 338 passed (D-01 / `rust-version`) |
+| Tests | `cargo test --workspace` | **355 passed, 0 failed, 0 warnings** |
+| MSRV | `cargo +1.83.0 test --workspace` | 355 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
 | Advisories | `cargo audit` | 0 vulnerabilities in 154 crates |
@@ -55,11 +57,11 @@ decoder (`cairn-provider::wire`: §4.2's three stream shapes into §3.4's `Strea
 | `cairn-eventbus` | 6 |
 | `cairn-session` (M1) | 44 |
 | `cairn-sse` (M1) | 23 |
-| `cairn-provider` (M1) | 55 |
+| `cairn-provider` (M1) | 72 |
 | `cairn-cli` unit | 43 |
 | `cairn-cli` integration (`cli.rs`) | 33 |
 | `cairn-cli` architecture (`arch.rs`) | 12 |
-| **Total** | **338** |
+| **Total** | **355** |
 
 ### Documentation deliverables (§15.6)
 
@@ -92,6 +94,7 @@ decoder (`cairn-provider::wire`: §4.2's three stream shapes into §3.4's `Strea
 | `cairn-core::registry` — §4.9's `models.json` parsed once (two consumers that may import only `core`), embedded at compile time, with alias resolution and `auth_header` split into name + prefix | done (M1) | §4.9, REQ-PROV-013, T-PROV-013 |
 | `cairn-provider::accounting` — §4.8's estimator (the branch predicate §4.8 named but did not state), `estimate_request`, and REQ-PROV-012's cost formula with `null` for an unpriced model | done (M1) | §4.8, REQ-PROV-012 |
 | `cairn-provider::wire` — `WireDecoder` turns one provider's payloads (SSE `data` for Anthropic/`OpenAI`, one NDJSON line for Ollama) into §3.4's `StreamEvent`s | done (M1) | T-PROV-001, T-PROV-025, T-PROV-026, T-PROV-028, T-PROV-029, T-PROV-035, §4.2, §4.3, §4.4 |
+| `cairn-provider::transport` + five §4.4 adapters — D-04 `reqwest` client (bundled Mozilla roots, `ca_bundle` adds a site CA), status→fault with 400 refinement and `Retry-After` capture, SSE framing plus NDJSON reframed through the same idle/cancel policy, mid-stream failures as terminal `Finish { stop: Error }` with the fault on a side channel; Anthropic/OpenAI/compat/Ollama/vLLM adapters with §4.4 shaping, non-network `health()`, and `T-ARCH-006`-clean HTTP (build-then-execute) | done (M1) | T-PROV-003, T-PROV-034, T-PROV-037, T-PROV-045, §4.4, §4.5, §4.10 |
 | `cairn-cli`: `sessions` on the real store, `export`, `migrate`, `resume <id>` load check | done (M1) | T-CLI-015, T-SEC-012 |
 | `cairn-tui`: slash-command registry (§10.3, REQ-TUI-004) | done | T-CLI-003 |
 | Stub crates for all 19 workspace members (compile + document boundaries) | done | T-ARCH-001, T-ARCH-003 |
@@ -147,6 +150,8 @@ testable — including the command `cairn doctor` points people at.
 | `models_path` read at load — the key was specified in §4.9 and §11.4.1 and read by nothing. An unusable override now warns `W-REG-FALLBACK` (a code that was registered and tested but emitted by no path) and falls back to the bundle, §11.4.2's absolute-or-`~` rule reaches it, and `cairn config set models_path …` refuses a value the next startup would discard | done | §4.9, REQ-PROV-014, T-PROV-014 |
 | `cairn-provider::accounting` — `estimate_tokens` applies §4.8's two formulas with the predicate the section named but never stated, `estimate_request` sums messages and tool schemas, and `cost_usd` returns REQ-PROV-012's formula as `Option<f64>` (`null` when §4.9's price is `null`, never `0.0`); `Capabilities::from_entry` is T-PROV-003's "equals the registry row" | done | §4.8, REQ-PROV-011, REQ-PROV-012 |
 | `cairn-provider::wire` — per-adapter wire decoder (§4.2's three stream shapes → §3.4's `StreamEvent`s): `Finish` only from `finish()` so `Usage` precedes it, one merged `Usage` only when the provider's numbers are complete, §4.3's ≥ 5 malformed abort with keep-alive and `[DONE]` uncounted, synthetic `ToolCallStart` (`synthetic-{index}`, empty name) for unknown indices, EndTurn→ToolUse when tools were seen (§4.4 row 6, both directions), no `ToolCallEnd`/`Finish` for a cut stream; `ProviderFault::from_status` maps numeric in-band codes; `ReasoningSignature` feeds §4.1's `Block::Reasoning.signature`; Responses API (`response.output_text.delta`) recorded outstanding | done | T-PROV-001, T-PROV-025, T-PROV-026, T-PROV-028, T-PROV-029, T-PROV-035, §4.2, §4.3, §4.4 |
+| `cairn-provider::transport` — D-04's client and the POST path: `reqwest` 0.12 with `default-features = false` (`rustls-tls-webpki-roots`, `stream`, `gzip`, `http2`), 10 s connect timeout, `ca_bundle` PEM added to the bundle; non-2xx mapped by `error_for_status` (exact `E-PROV-AUTH` message, 400 refinement to `ContextLength`/`ContentFilter`, `Retry-After` captured on 429); bytes pumped through `SseStream` (idle + 50 ms cancel poll) into the decoder, Ollama's NDJSON reframed line-by-line so the same policy applies; mid-stream failures end with `Finish { stop: Error }`, EOF-without-terminator records `Unreachable` (§4.7), cancellation ends silently; covered live against loopback | done | §4.3, §4.5, T-PROV-034, T-PROV-037, T-PROV-045 |
+| Five §4.4 adapters — Anthropic/OpenAI/compat/Ollama/vLLM over one `Core`: registry resolution (alias-aware, `""` base_url means default), `health()` with no network (`UnknownModel`/`Misconfigured`/`NoCredentials`, Ollama keyless per §4.10), `stream()` refusing before any socket, `capabilities()` from the registry row, `count_tokens()` local; pure shaping snapshots (Anthropic system breakpoint + tool blocks, OpenAI `include_usage` + o-series `max_completion_tokens`, Ollama object args + `num_predict`); `env_key` covers §4.10 steps 1–2 | done | T-PROV-003, §4.4, §4.10 |
 
 ### Decisions taken while landing the session store
 
@@ -258,6 +263,17 @@ own: a section that claims completeness, and does not have it.
     blank-`data:`-as-keep-alive, and no-`ToolCallEnd`-no-`Finish` for a cut stream; §4.4's row 6
     reads in both directions (plain stop + tools seen ⇒ `ToolUse`); the Responses API stays listed
     but marked not decoded in M1. Implemented as `cairn-provider::wire::WireDecoder`.
+20. **D-04 fixed rustls with bundled Mozilla roots while §15.2 promised native roots; the bundle
+    crate's `CDLA-Permissive-2.0` was outside D-13; §4.3 never said how a mid-stream failure
+    reaches a `BoxStream` caller**
+    → D-04 wins (it is the decision): §15.2 pins `rustls`/`webpki-roots` with `ca_bundle` adding
+    a site CA, and the `reqwest` row names its exact feature flags (`rustls-tls-webpki-roots`,
+    `stream`, `gzip`, `http2`, no `json` — the body is shaped as a `Value` first). D-13 gains
+    `CDLA-Permissive-2.0` (permissive CA-bundle data, no copyleft — the Unicode-3.0 rule).
+    §4.3 now ends mid-stream failures with `Finish { stop: Error }`, detail logged per §12.1.
+    §4.4 now states the `max_completion_tokens` rule and mandatory `include_usage`; §4.10 states
+    keyless providers are `Ready` without a key. Implemented as `cairn-provider::transport`
+    plus the five adapters.
 
 ## Known limitations of the M0 delivery
 
@@ -274,6 +290,11 @@ own: a section that claims completeness, and does not have it.
   `cairn-session`.
 - **`schemas/tools/` is empty** until the M4 tool registry emits its schemas; `check-schemas.sh` only
   notes their absence today.
+- **Foreign-target `cargo check` no longer runs locally.** `ring` (via `reqwest` →
+  `hyper-rustls`) needs a native C toolchain per target, so the Windows/macOS legs are
+  verified by CI runners, not by `cargo check --target` on Linux. New code in this
+  area stays portable by construction (no platform APIs, loopback and `temp_dir` in
+  tests) and every push is CI-verified before the next chunk lands.
 - **`cargo +1.83.0` prints one line** — `warning: ignoring 'resolver' config table without
   '-Zmsrv-policy'` — because cargo 1.83 predates the MSRV-aware resolver that `.cargo/config.toml`
   configures. It is informational; the lockfile it reads was produced by a newer cargo.
@@ -310,22 +331,21 @@ The session store, `cairn-sse`, the boxed `Provider` trait, §4.5's retry policy
 registry + accounting are done, and the spec now agrees with where the provider code belongs.
 Next, in order:
 
-1. **The five adapters** (§4.4 shaping over the landed trait): Anthropic, OpenAI, an
-   OpenAI-compatible proxy, Ollama (NDJSON, §4.2 row 2) and vLLM — each reporting
-   `ProviderHealth` from `health()` without touching the network. Each adapter is thin
-   framing + `cairn-provider::wire::WireDecoder` (landed): the payload extraction lives
-   in the adapter, the event mapping does not move. The reqwest transport step MUST
-   resolve the D-04 vs §15.2 contradiction first: D-04 says rustls with *no default
-   roots → bundled Mozilla roots*, §15.2's `rustls-native-certs` row says *native roots*
-   with `ca_bundle` override — one of the two rows changes before the first socket opens.
-2. **The §4.5 retry loop** — the *policy* is landed (`cairn-provider::retry`: `delay_bounds`,
+1. **The §4.5 retry loop** — the *policy* is landed (`cairn-provider::retry`: `delay_bounds`,
    `Retry-After` in seconds and HTTP-date, the 120 s cap, `RetryBudget`, cancellation-shaped
-   point ranges), what is missing is the `while` that drives it around a `Provider::stream` and
-   discards partial content per §4.7 (REQ-PROV-009). Needs the adapters from 1 to be real.
-3. **The mock provider and its cassettes**, so T-PROV-001..048 and T-FAULT-001..006 can run
-   without a live key. §4.8/§4.9's registry, estimator and cost formula are already in place for
-   them (`cairn-core::registry`, `cairn-provider::accounting`), so an adapter is only the wire
-   shaping left to write.
+   point ranges), the adapters are real, and every mid-stream fault is recorded on the
+   adapter's side channel: what is missing is the `while` that drives `Provider::stream`,
+   reads the side channel through a new trait method (`last_error` — §3.4 addition, amendment
+   21), and discards partial content per §4.7 (REQ-PROV-009). Needs no new dependencies.
+2. **The mock provider and its cassettes**, so T-PROV-001..048 and T-FAULT-001..006 can run
+   without a live key. The transport is already covered live against loopback; the mock
+   serves the same shapes without sockets.
+3. **User-model bridging and the compat probe.** Adapters resolve against the bare
+   registry: a user-defined `models.<id>` (REQ-PROV-013's escape hatch) and a proxy's
+   declared capabilities need the `run` wiring, which owns the full `Config`, to reach
+   them — plus §4.2's auto-detect probe (first `stream()` with tools refines
+   `tool_calling`) and §4.10 steps 3–5 (keychain, config files). None of it is network
+   shape; all of it is construction plumbing.
 4. **`cairn-parse`** (the tree-sitter wrapper).
 5. **Headless `cairn run -p …`** with text/json/stream-json output and the §11.2 exit codes
    (T-CLI-010..014/016/017), then logging + redaction (§12.1).

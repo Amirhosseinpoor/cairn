@@ -12,9 +12,14 @@ cairn-sse.workspace = true
 chrono.workspace = true
 futures.workspace = true
 rand.workspace = true
+reqwest.workspace = true
+bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
 
 [lints]
 workspace = true

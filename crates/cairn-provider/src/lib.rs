@@ -9,17 +9,22 @@
 //! an adapter hands it a payload and gets §3.4's events back.
 //!
 //! Delivered in milestone **M1** (SPEC §15.4): the trait, §4.5's taxonomy and
-//! retry policy, §4.8/§4.9's registry and cost accounting, and the wire
-//! decoder are in place; what is left is the five adapters on top of it, the
-//! retry loop, and the mock provider with its cassettes.
+//! retry policy, §4.8/§4.9's registry and cost accounting, the wire decoder,
+//! the §4.3 transport, and the five §4.4 adapters are in place; what is left
+//! is the retry loop driving them, and the mock provider with its cassettes.
 
 mod accounting;
+mod adapters;
 mod error;
 mod retry;
+mod transport;
 mod types;
 mod wire;
 
 pub use accounting::{cost_usd, estimate_request, estimate_tokens};
+pub use adapters::{
+    env_key, AnthropicAdapter, OllamaAdapter, OpenaiAdapter, OpenaiCompatibleAdapter, VllmAdapter,
+};
 pub use error::{Backoff, ProviderError, ProviderFault, ALL_FAULTS};
 pub use retry::{
     delay_bounds, parse_retry_after, sample_delay, RetryBudget, MAX_TOTAL, RATE_LIMIT_CAP,

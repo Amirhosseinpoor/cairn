@@ -161,6 +161,15 @@ impl WireDecoder {
         self.malformed
     }
 
+    /// Whether the stream ended the way its protocol says a stream ends: the
+    /// terminator arrived (`[DONE]`, `message_stop`, Ollama's `done`) or a
+    /// stop reason did. The transport uses it to tell a clean end from a
+    /// connection lost mid-turn (§4.7).
+    #[must_use]
+    pub(crate) fn ended_cleanly(&self) -> bool {
+        self.terminated || self.finish_stop.is_some()
+    }
+
     // ------------------------------------------------------------- plumbing
 
     fn record_malformed(&mut self, detail: &str) -> Result<Vec<StreamEvent>, ProviderError> {
@@ -717,7 +726,10 @@ fn inband_error(value: &Value) -> Option<(ProviderFault, String)> {
 /// Map an `OpenAI` `error.code` or an Anthropic `error.type` onto §4.5's rows.
 /// Anything unrecognised is `None`, and the caller treats "a provider that
 /// errored in a way we have no row for" as `Server`.
-fn fault_from_name(name: &str) -> Option<ProviderFault> {
+///
+/// `pub(crate)` because the transport refines §4.5's 400s with the same
+/// vocabulary rather than a second copy of it.
+pub(crate) fn fault_from_name(name: &str) -> Option<ProviderFault> {
     Some(match name {
         "authentication_error" | "invalid_api_key" => ProviderFault::Auth,
         "permission_error" | "permission_denied" => ProviderFault::Forbidden,

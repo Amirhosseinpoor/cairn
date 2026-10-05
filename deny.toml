@@ -14,8 +14,9 @@ no-default-features = false
 
 [licenses]
 version = 2
-# D-13: "Permissive only: MIT, Apache-2.0, BSD-2/3, ISC, Unlicense, Zlib.
-# MIT-0 accepted."  Copyleft in any linking position is rejected. No exceptions.
+# D-13: "Permissive only: MIT, Apache-2.0, BSD-2/3, ISC, Unlicense, Zlib,
+# CDLA-Permissive-2.0. MIT-0 accepted."  Copyleft in any linking position is
+# rejected. No exceptions.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -30,6 +31,11 @@ allow = [
     # OSI-approved and permissive — D-13 rejects copyleft, not permissives
     # outside its illustrative list.
     "Unicode-3.0",
+    # `webpki-roots` (via reqwest's `rustls-tls-webpki-roots` → hyper-rustls)
+    # carries `CDLA-Permissive-2.0`. It is the Mozilla CA bundle D-04's
+    # bundled-roots choice requires: permissive, no copyleft obligations —
+    # the same rule that admitted Unicode-3.0.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]
