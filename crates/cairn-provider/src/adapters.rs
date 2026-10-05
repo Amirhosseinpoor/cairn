@@ -339,6 +339,10 @@ impl Provider for AnthropicAdapter {
     fn health(&self) -> ProviderHealth {
         self.core.health()
     }
+
+    fn take_last_error(&self) -> Option<ProviderError> {
+        self.core.last_error.lock().expect("fault record").take()
+    }
 }
 
 /// `OpenAI` (`/v1/chat/completions`), shaped per §4.4's second column.
@@ -400,6 +404,10 @@ impl Provider for OpenaiAdapter {
 
     fn health(&self) -> ProviderHealth {
         self.core.health()
+    }
+
+    fn take_last_error(&self) -> Option<ProviderError> {
+        self.core.last_error.lock().expect("fault record").take()
     }
 }
 
@@ -479,6 +487,10 @@ impl Provider for OpenaiCompatibleAdapter {
     fn health(&self) -> ProviderHealth {
         self.core.health()
     }
+
+    fn take_last_error(&self) -> Option<ProviderError> {
+        self.core.last_error.lock().expect("fault record").take()
+    }
 }
 
 /// Ollama (`/api/chat`, NDJSON), shaped per §4.4's third column.
@@ -540,6 +552,10 @@ impl Provider for OllamaAdapter {
 
     fn health(&self) -> ProviderHealth {
         self.core.health()
+    }
+
+    fn take_last_error(&self) -> Option<ProviderError> {
+        self.core.last_error.lock().expect("fault record").take()
     }
 }
 
@@ -604,6 +620,10 @@ impl Provider for VllmAdapter {
 
     fn health(&self) -> ProviderHealth {
         self.core.health()
+    }
+
+    fn take_last_error(&self) -> Option<ProviderError> {
+        self.core.last_error.lock().expect("fault record").take()
     }
 }
 

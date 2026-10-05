@@ -410,10 +410,14 @@ fn pump(
                             reading.pending.extend(reading.decoder.finish());
                             if reading.pending.is_empty() && !clean {
                                 // EOF with no terminator and no stop: the
-                                // connection died mid-turn (§4.7), it did not
-                                // end it.
+                                // server closed the stream without ending the
+                                // turn. A disconnect (T-FAULT-006), so it
+                                // shares `E-PROV-NET` — but a server that does
+                                // this twice is broken rather than flaky,
+                                // hence `Truncated`'s single retry instead of
+                                // the five a dropped socket gets.
                                 *record.lock().expect("fault record") = Some(ProviderError::new(
-                                    ProviderFault::Unreachable,
+                                    ProviderFault::Truncated,
                                     "the connection closed before the stream terminator",
                                 ));
                                 reading.pending.push_back(StreamEvent::Finish {
@@ -711,7 +715,7 @@ mod tests {
                 .expect("record")
                 .as_ref()
                 .map(|error| error.fault),
-            Some(ProviderFault::Unreachable)
+            Some(ProviderFault::Truncated)
         );
     }
 

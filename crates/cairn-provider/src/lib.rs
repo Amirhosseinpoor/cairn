@@ -17,6 +17,7 @@ mod accounting;
 mod adapters;
 mod error;
 mod retry;
+mod retry_loop;
 mod transport;
 mod types;
 mod wire;
@@ -29,6 +30,7 @@ pub use error::{Backoff, ProviderError, ProviderFault, ALL_FAULTS};
 pub use retry::{
     delay_bounds, parse_retry_after, sample_delay, RetryBudget, MAX_TOTAL, RATE_LIMIT_CAP,
 };
+pub use retry_loop::{stream_with_retry, Compact};
 pub use types::{
     Capabilities, ModelRequest, ProviderHealth, ProviderId, StreamEvent, TokenCount, ToolSpec,
 };
@@ -74,6 +76,12 @@ pub trait Provider: Send + Sync + 'static {
     /// Cheap, non-network capability probe (§4.3/§4.10): credentials present,
     /// model id known, config usable.
     fn health(&self) -> ProviderHealth;
+
+    /// The fault behind the most recent mid-stream failure, if any. Reading
+    /// clears it, so the §4.5 retry loop never bills one attempt's fault to
+    /// the next. `None` after a clean stream, before any call, or when the
+    /// stream ended silently on cancellation.
+    fn take_last_error(&self) -> Option<ProviderError>;
 }
 
 #[cfg(test)]

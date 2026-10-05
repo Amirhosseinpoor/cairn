@@ -55,6 +55,11 @@ pub enum ProviderFault {
     /// DNS failure or connection refused — and, per §4.7, a connection lost
     /// mid-stream.
     Unreachable,
+    /// Clean EOF with no terminator and no stop: the server closed the
+    /// stream without ending the turn (T-FAULT-006). A disconnect, so it
+    /// shares `E-PROV-NET` — but a server that does this twice in a row is
+    /// broken rather than flaky, so it gets one retry, not five.
+    Truncated,
     /// §4.3 idle timeout: no bytes for 45 s.
     Idle,
     /// §4.3: five or more malformed events in one stream.
@@ -86,6 +91,7 @@ pub const ALL_FAULTS: &[ProviderFault] = &[
     ProviderFault::Server,
     ProviderFault::Tls,
     ProviderFault::Unreachable,
+    ProviderFault::Truncated,
     ProviderFault::Idle,
     ProviderFault::MalformedStream,
     ProviderFault::EventTooBig,
@@ -112,7 +118,7 @@ impl ProviderFault {
             Self::BadRequest => codes::PROV_REQ,
             Self::Server => codes::PROV_SERVER,
             Self::Tls => codes::PROV_TLS,
-            Self::Unreachable => codes::PROV_NET,
+            Self::Unreachable | Self::Truncated => codes::PROV_NET,
             Self::Idle => codes::PROV_IDLE,
             Self::MalformedStream => codes::PROV_MALFORMED,
             Self::EventTooBig => codes::PROV_EVENTBIG,
@@ -133,6 +139,7 @@ impl ProviderFault {
                 | Self::ContextLength
                 | Self::Server
                 | Self::Unreachable
+                | Self::Truncated
                 | Self::Idle
                 | Self::MalformedStream
         )
@@ -142,7 +149,7 @@ impl ProviderFault {
     #[must_use]
     pub const fn retries(self) -> u8 {
         match self {
-            Self::MalformedStream | Self::ContextLength => 1,
+            Self::MalformedStream | Self::ContextLength | Self::Truncated => 1,
             Self::Timeout | Self::RateLimited | Self::Server | Self::Unreachable | Self::Idle => 5,
             _ => 0,
         }
@@ -154,7 +161,9 @@ impl ProviderFault {
         match self {
             Self::MalformedStream => Backoff::Fixed(Duration::from_secs(1)),
             Self::Idle => Backoff::Exponential,
-            Self::Timeout | Self::Server | Self::Unreachable => Backoff::ExponentialFullJitter,
+            Self::Timeout | Self::Server | Self::Unreachable | Self::Truncated => {
+                Backoff::ExponentialFullJitter
+            }
             Self::RateLimited => Backoff::RateLimited,
             _ => Backoff::None,
         }
@@ -362,6 +371,13 @@ mod tests {
                 "E-PROV-NET",
                 true,
                 5,
+                ExponentialFullJitter,
+            ),
+            (
+                ProviderFault::Truncated,
+                "E-PROV-NET",
+                true,
+                1,
                 ExponentialFullJitter,
             ),
             (ProviderFault::Idle, "E-PROV-IDLE", true, 5, Exponential),

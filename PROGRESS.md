@@ -21,8 +21,8 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **355 passed, 0 failed, 0 warnings** |
-| MSRV | `cargo +1.83.0 test --workspace` | 355 passed (D-01 / `rust-version`) |
+| Tests | `cargo test --workspace` | **365 passed, 0 failed, 0 warnings** |
+| MSRV | `cargo +1.83.0 test --workspace` | 365 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
 | Advisories | `cargo audit` | 0 vulnerabilities in 154 crates |
@@ -57,11 +57,11 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | `cairn-eventbus` | 6 |
 | `cairn-session` (M1) | 44 |
 | `cairn-sse` (M1) | 23 |
-| `cairn-provider` (M1) | 72 |
+| `cairn-provider` (M1) | 82 |
 | `cairn-cli` unit | 43 |
 | `cairn-cli` integration (`cli.rs`) | 33 |
 | `cairn-cli` architecture (`arch.rs`) | 12 |
-| **Total** | **355** |
+| **Total** | **365** |
 
 ### Documentation deliverables (§15.6)
 
@@ -152,6 +152,7 @@ testable — including the command `cairn doctor` points people at.
 | `cairn-provider::wire` — per-adapter wire decoder (§4.2's three stream shapes → §3.4's `StreamEvent`s): `Finish` only from `finish()` so `Usage` precedes it, one merged `Usage` only when the provider's numbers are complete, §4.3's ≥ 5 malformed abort with keep-alive and `[DONE]` uncounted, synthetic `ToolCallStart` (`synthetic-{index}`, empty name) for unknown indices, EndTurn→ToolUse when tools were seen (§4.4 row 6, both directions), no `ToolCallEnd`/`Finish` for a cut stream; `ProviderFault::from_status` maps numeric in-band codes; `ReasoningSignature` feeds §4.1's `Block::Reasoning.signature`; Responses API (`response.output_text.delta`) recorded outstanding | done | T-PROV-001, T-PROV-025, T-PROV-026, T-PROV-028, T-PROV-029, T-PROV-035, §4.2, §4.3, §4.4 |
 | `cairn-provider::transport` — D-04's client and the POST path: `reqwest` 0.12 with `default-features = false` (`rustls-tls-webpki-roots`, `stream`, `gzip`, `http2`), 10 s connect timeout, `ca_bundle` PEM added to the bundle; non-2xx mapped by `error_for_status` (exact `E-PROV-AUTH` message, 400 refinement to `ContextLength`/`ContentFilter`, `Retry-After` captured on 429); bytes pumped through `SseStream` (idle + 50 ms cancel poll) into the decoder, Ollama's NDJSON reframed line-by-line so the same policy applies; mid-stream failures end with `Finish { stop: Error }`, EOF-without-terminator records `Unreachable` (§4.7), cancellation ends silently; covered live against loopback | done | §4.3, §4.5, T-PROV-034, T-PROV-037, T-PROV-045 |
 | Five §4.4 adapters — Anthropic/OpenAI/compat/Ollama/vLLM over one `Core`: registry resolution (alias-aware, `""` base_url means default), `health()` with no network (`UnknownModel`/`Misconfigured`/`NoCredentials`, Ollama keyless per §4.10), `stream()` refusing before any socket, `capabilities()` from the registry row, `count_tokens()` local; pure shaping snapshots (Anthropic system breakpoint + tool blocks, OpenAI `include_usage` + o-series `max_completion_tokens`, Ollama object args + `num_predict`); `env_key` covers §4.10 steps 1–2 | done | T-PROV-003, §4.4, §4.10 |
+| §4.5 retry loop — `stream_with_retry` drives `Provider::stream` under the matrix: attempts never overlap, setup and mid-stream faults share one path, `ContextLength` compacts once and resends immediately (fatal on the second), backoffs sleep in 250 ms steps so cancel wins (REQ-PROV-006), budget exhaustion and fatal faults end the turn with one synthesised `Finish { stop: Error }` when no bytes flowed, cancellation always silent; new `Truncated` fault (shares `E-PROV-NET`, one retry) for clean EOF without terminator or stop | done | T-FAULT-001, T-FAULT-004, T-FAULT-006, T-PROV-006, T-PROV-033, T-PROV-037, §4.5, REQ-PROV-005, REQ-PROV-009 |
 
 ### Decisions taken while landing the session store
 
@@ -274,6 +275,18 @@ own: a section that claims completeness, and does not have it.
     §4.4 now states the `max_completion_tokens` rule and mandatory `include_usage`; §4.10 states
     keyless providers are `Ready` without a key. Implemented as `cairn-provider::transport`
     plus the five adapters.
+21. **T-FAULT-006 demanded "retry once → `E-PROV-PROTO`" — a retryable-then-fatal sequence no
+    fault can produce — while §4.7 resolves truncation-as-disconnect with five retries; §3.4's
+    `stream` had no channel for a mid-stream fault, so a retry loop cannot apply the matrix
+    past the first byte; §3.2's `cairn-provider` MAY row named no timer for REQ-PROV-006's
+    cancel-mid-backoff bound; and nothing said what a call that fails before its first byte
+    yields**
+    → new `Truncated` fault sharing `E-PROV-NET` with one retry (§4.5 row added; T-FAULT-006's
+    terminal corrected to NET — the "retry once" was right, the code was not).
+    `Provider::take_last_error` (§3.4) carries the fault out, reading clears it. §3.2's MAY row
+    gains tokio (time only). A call that never gets its first byte still ends with one terminal
+    `Finish { stop: Error }`; cancellation ends silently. Implemented as
+    `cairn-provider::retry_loop::stream_with_retry`.
 
 ## Known limitations of the M0 delivery
 
@@ -331,16 +344,11 @@ The session store, `cairn-sse`, the boxed `Provider` trait, §4.5's retry policy
 registry + accounting are done, and the spec now agrees with where the provider code belongs.
 Next, in order:
 
-1. **The §4.5 retry loop** — the *policy* is landed (`cairn-provider::retry`: `delay_bounds`,
-   `Retry-After` in seconds and HTTP-date, the 120 s cap, `RetryBudget`, cancellation-shaped
-   point ranges), the adapters are real, and every mid-stream fault is recorded on the
-   adapter's side channel: what is missing is the `while` that drives `Provider::stream`,
-   reads the side channel through a new trait method (`last_error` — §3.4 addition, amendment
-   21), and discards partial content per §4.7 (REQ-PROV-009). Needs no new dependencies.
-2. **The mock provider and its cassettes**, so T-PROV-001..048 and T-FAULT-001..006 can run
-   without a live key. The transport is already covered live against loopback; the mock
-   serves the same shapes without sockets.
-3. **User-model bridging and the compat probe.** Adapters resolve against the bare
+1. **The mock provider and its cassettes**, so T-PROV-001..048 and T-FAULT-001..006 can run
+   without a live key. The transport is covered live against loopback and the retry loop
+   against a scripted fake; the mock serves recorded SSE/NDJSON shapes for the remaining
+   rows (T-PROV-002/004/006/008/009/011 and the fault-table rest).
+2. **User-model bridging and the compat probe.** Adapters resolve against the bare
    registry: a user-defined `models.<id>` (REQ-PROV-013's escape hatch) and a proxy's
    declared capabilities need the `run` wiring, which owns the full `Config`, to reach
    them — plus §4.2's auto-detect probe (first `stream()` with tools refines
