@@ -546,8 +546,10 @@ mod tests {
     }
 
     /// Serve one canned HTTP response on loopback and return its base URL.
-    /// The server thread reads the request head, writes the whole response,
-    /// and — unless `truncate_after` says otherwise — closes cleanly.
+    /// The server thread reads the whole request — head plus exactly the
+    /// body's `Content-Length` — before answering. Answering while the client
+    /// is still sending closes the socket with unread inbound data, which
+    /// some platforms answer with RST and fail the request.
     fn serve(response: Vec<u8>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback");
         let address = listener.local_addr().expect("loopback addr");
@@ -560,6 +562,16 @@ mod tests {
                     return;
                 }
                 head.push(byte[0]);
+            }
+            let length = String::from_utf8_lossy(&head)
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut body = vec![0u8; length.min(1 << 20)];
+            if !body.is_empty() && socket.read_exact(&mut body).is_err() {
+                return;
             }
             socket.write_all(&response).ok();
         });
