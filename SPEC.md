@@ -413,6 +413,10 @@ pub trait Provider: Send + Sync + 'static {
     /// clears it, so the §4.5 retry loop never bills one attempt's fault to
     /// the next.
     fn take_last_error(&self) -> Option<ProviderError>;
+
+    /// Re-publish a fault for the end consumer: the retry loop calls this
+    /// with the terminal fault, whose taking consumed the only copy.
+    fn record_last_error(&self, error: ProviderError);
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

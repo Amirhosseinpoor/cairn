@@ -7,6 +7,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 // ------------------------------------------------------------------ fixtures
@@ -107,10 +108,17 @@ fn t_cli_001_exit_code_paths() {
 
     // 1 — unhandled / not-yet-implemented subsystem
     fx.cairn()
-        .args(["run", "-p", "hi"])
+        .args(["chat"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("E-IMPL-STAGE"));
+
+    // `run` landed in M1: without a key it fails as a provider error, not a stub.
+    fx.cairn()
+        .args(["run", "-p", "hi"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("E-PROV-AUTH"));
 
     // 2 — bad usage / bad config
     fx.cairn()
@@ -149,7 +157,7 @@ fn t_cli_001_exit_code_paths() {
 fn t_cli_002_code_line_in_normal_and_quiet() {
     let fx = Fixture::new();
     let cases: [(&[&str], &str); 5] = [
-        (&["run", "-p", "hi"], "E-IMPL-STAGE"),
+        (&["chat"], "E-IMPL-STAGE"),
         (
             &["run", "-p", "hi", "--prompt-file", "x.txt"],
             "E-CLI-USAGE",
@@ -1227,4 +1235,223 @@ fn version_needs_no_config() {
     let out = fx.cairn().arg("--version").output().unwrap();
     assert_eq!(out.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&out.stdout).contains("cairn"));
+}
+
+// ------------------------------------------------- T-CLI-010 `run -p` live
+
+/// A loopback `OpenAI` server: serves `response` to the next `takes`
+/// connections, capturing each request body for assertions.
+fn serve_loopback(
+    response: Vec<u8>,
+    takes: usize,
+    bodies: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback");
+    let address = listener.local_addr().expect("addr");
+    std::thread::spawn(move || {
+        for _ in 0..takes {
+            let Ok((mut socket, _)) = listener.accept() else {
+                return;
+            };
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                if socket.read_exact(&mut byte).is_err() || head.len() > 1 << 20 {
+                    return;
+                }
+                head.push(byte[0]);
+            }
+            let length = String::from_utf8_lossy(&head)
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut body = vec![0u8; length.min(1 << 20)];
+            if !body.is_empty() && socket.read_exact(&mut body).is_err() {
+                return;
+            }
+            bodies.lock().expect("bodies").push(body);
+            if socket.write_all(&response).is_err() {
+                return;
+            }
+        }
+    });
+    format!("http://{address}")
+}
+
+fn sse_ok(body: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
+}
+
+fn success_body() -> String {
+    concat!(
+        "data: {\"id\":\"c\",\"model\":\"gpt-5.1-codex\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2},\"choices\":[]}\n\n",
+        "data: [DONE]\n\n",
+    )
+    .to_string()
+}
+
+/// Point the fixture's config at `base_url` for the `OpenAI` provider.
+fn point_at_loopback(fx: &Fixture, base_url: &str) {
+    std::fs::write(
+        fx.user_config(),
+        format!(
+            "model = \"openai/gpt-5.1-codex\"\n\n[providers.openai]\nbase_url = \"{base_url}\"\n"
+        ),
+    )
+    .expect("config");
+}
+
+/// T-CLI-010's success third and T-CLI-017: all three formats against one
+/// loopback turn — text prints the answer, `json` prints one object, and
+/// every `stream-json` line parses with no ANSI anywhere.
+#[test]
+fn run_succeeds_in_all_three_formats() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 3, Arc::clone(&bodies));
+
+    for format in ["text", "json", "stream-json"] {
+        let fx = Fixture::new();
+        point_at_loopback(&fx, &url);
+        let out = fx
+            .cairn()
+            .env("CAIRN_OPENAI_API_KEY", "test")
+            .args(["run", "-p", "hi", "--output", format])
+            .output()
+            .expect("runs");
+        assert_eq!(out.status.code(), Some(0), "{format}: {out:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !text.contains('\u{1b}'),
+            "{format}: no ANSI escapes on stdout"
+        );
+        match format {
+            "text" => assert_eq!(text, "Hi\n"),
+            "json" => {
+                let value: serde_json::Value =
+                    serde_json::from_str(&text).expect("one JSON object");
+                assert_eq!(value["text"], "Hi");
+                assert_eq!(value["usage"]["input"], 10);
+                assert_eq!(value["stop"], "end_turn");
+                assert!(value["error"].is_null());
+            }
+            _ => {
+                assert!(!text.trim().is_empty(), "stream-json emits lines");
+                for line in text.lines() {
+                    serde_json::from_str::<serde_json::Value>(line).expect("every line is JSON");
+                }
+                assert!(text.contains("text_delta"), "deltas stream: {text}");
+                assert!(text.contains("gpt-5.1-codex"), "start event: {text}");
+            }
+        }
+    }
+
+    // The prompt reached the server as the shaped request body.
+    let bodies = bodies.lock().expect("bodies");
+    assert_eq!(bodies.len(), 3);
+    for body in bodies.iter() {
+        let request: serde_json::Value = serde_json::from_slice(body).expect("shaped JSON");
+        assert_eq!(request["model"], "gpt-5.1-codex");
+        assert_eq!(request["messages"][0]["content"], "hi");
+    }
+}
+
+/// T-CLI-010's failure third: a 401 is exit 3 with the stable code and the
+/// login hint — no retries, no success output.
+#[test]
+fn run_model_failure_is_exit_3_with_code() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let denied = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+    let url = serve_loopback(denied.as_bytes().to_vec(), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    let out = fx
+        .cairn()
+        .env("CAIRN_OPENAI_API_KEY", "test")
+        .args(["run", "-p", "hi"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("E-PROV-AUTH"), "{stderr}");
+    assert!(stderr.contains("cairn auth login"), "{stderr}");
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+}
+
+/// An id the registry does not know — via REQ-PROV-013's escape hatch, so
+/// validation passes it and the failure surfaces at build time — fails
+/// before any socket, as usage error 2 with the validator's code.
+#[test]
+fn run_unknown_model_is_exit_2() {
+    let fx = Fixture::new();
+    std::fs::write(
+        fx.user_config(),
+        "model = \"my-custom-model\"\n\n[models.\"my-custom-model\"]\ncontext_window = 8000\n",
+    )
+    .expect("config");
+    fx.cairn()
+        .args(["run", "-p", "hi"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("E-CFG-NOMODEL"));
+}
+
+/// A `base_url` that is not a URL never reaches the adapter: validation
+/// substitutes the registry default (`W-CFG-FALLBACK`), and the run proceeds
+/// against it — here, into the no-key failure.
+#[test]
+fn run_bad_base_url_falls_back_to_default() {
+    let fx = Fixture::new();
+    point_at_loopback(&fx, "not a url");
+    let out = fx
+        .cairn()
+        .env("CAIRN_OPENAI_API_KEY", "test")
+        .args(["run", "-p", "hi"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("W-CFG-FALLBACK"), "{stderr}");
+    assert!(stderr.contains("E-PROV-AUTH"), "{stderr}");
+}
+
+/// Anything but the three run formats is exit 2 — caught by startup
+/// validation before `run` itself ever sees the value.
+#[test]
+fn run_rejects_unknown_output_format() {
+    let fx = Fixture::new();
+    fx.cairn()
+        .args(["run", "-p", "hi", "--output", "bogus"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("E-CFG-BADVALUE"));
+}
+
+/// `--prompt-file` feeds the prompt: the file's text is what the server
+/// receives.
+#[test]
+fn run_prompt_file_feeds_the_prompt() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    let prompt = fx.ws.join("prompt.txt");
+    std::fs::write(&prompt, "from a file").expect("prompt");
+    fx.cairn()
+        .env("CAIRN_OPENAI_API_KEY", "test")
+        .args(["run", "--prompt-file", prompt.to_str().expect("utf8")])
+        .assert()
+        .code(0);
+    let bodies = bodies.lock().expect("bodies");
+    assert_eq!(bodies.len(), 1);
+    let request: serde_json::Value = serde_json::from_slice(&bodies[0]).expect("shaped JSON");
+    assert_eq!(request["messages"][0]["content"], "from a file");
 }

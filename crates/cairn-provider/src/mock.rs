@@ -223,6 +223,10 @@ impl Provider for MockProvider {
     fn take_last_error(&self) -> Option<ProviderError> {
         self.last_error.lock().expect("last").take()
     }
+
+    fn record_last_error(&self, error: ProviderError) {
+        *self.last_error.lock().expect("last") = Some(error);
+    }
 }
 
 /// Serve one canned HTTP response on loopback and return its base URL.

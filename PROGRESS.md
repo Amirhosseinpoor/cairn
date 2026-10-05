@@ -21,8 +21,8 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **379 passed, 0 failed, 0 warnings** |
-| MSRV | `cargo +1.83.0 test --workspace` | 379 passed (D-01 / `rust-version`) |
+| Tests | `cargo test --workspace` | **392 passed, 0 failed, 0 warnings** |
+| MSRV | `cargo +1.83.0 test --workspace` | 392 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
 | Advisories | `cargo audit` | 0 vulnerabilities in 154 crates |
@@ -34,7 +34,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Criterion | State |
 |-----------|-------|
 | T-CFG-001..006, T-CFG-010..030 | ✅ `cairn-config` (54 tests) |
-| T-CLI-001..003, T-CLI-020..023 | ✅ `cairn-cli` (43 unit + 33 integration) |
+| T-CLI-001..003, T-CLI-020..023 | ✅ `cairn-cli` (50 unit + 39 integration) |
 | T-ARCH-001..008 | ✅ `cairn-cli/tests/arch.rs` (12 tests) |
 | T-SCHEMA-001..003 | ✅ committed schemas are byte-drift-checked |
 | T-TECH-001 | ✅ `deny.toml` + `cargo deny check` |
@@ -58,10 +58,10 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | `cairn-session` (M1) | 44 |
 | `cairn-sse` (M1) | 23 |
 | `cairn-provider` (M1) | 96 |
-| `cairn-cli` unit | 43 |
-| `cairn-cli` integration (`cli.rs`) | 33 |
+| `cairn-cli` unit | 50 |
+| `cairn-cli` integration (`cli.rs`) | 39 |
 | `cairn-cli` architecture (`arch.rs`) | 12 |
-| **Total** | **379** |
+| **Total** | **392** |
 
 ### Documentation deliverables (§15.6)
 
@@ -96,6 +96,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | `cairn-provider::wire` — `WireDecoder` turns one provider's payloads (SSE `data` for Anthropic/`OpenAI`, one NDJSON line for Ollama) into §3.4's `StreamEvent`s | done (M1) | T-PROV-001, T-PROV-025, T-PROV-026, T-PROV-028, T-PROV-029, T-PROV-035, §4.2, §4.3, §4.4 |
 | `cairn-provider::transport` + five §4.4 adapters — D-04 `reqwest` client (bundled Mozilla roots, `ca_bundle` adds a site CA), status→fault with 400 refinement and `Retry-After` capture, SSE framing plus NDJSON reframed through the same idle/cancel policy, mid-stream failures as terminal `Finish { stop: Error }` with the fault on a side channel; Anthropic/OpenAI/compat/Ollama/vLLM adapters with §4.4 shaping, non-network `health()`, and `T-ARCH-006`-clean HTTP (build-then-execute) | done (M1) | T-PROV-003, T-PROV-034, T-PROV-037, T-PROV-045, §4.4, §4.5, §4.10 |
 | `cairn-cli`: `sessions` on the real store, `export`, `migrate`, `resume <id>` load check | done (M1) | T-CLI-015, T-SEC-012 |
+| `cairn run -p` one-shot — prompt from `-p`/file/stdin, `provide::build` bridging (registry + base_url/api_key/ca_bundle overrides, model limits, capped retry budget), current-thread runtime with Ctrl-C watcher, text/json/stream-json output, exit 0/3/7 with the fault's stable code | done (M1) | T-CLI-010, T-CLI-017, T-CLI-020 |
 | `cairn-tui`: slash-command registry (§10.3, REQ-TUI-004) | done | T-CLI-003 |
 | Stub crates for all 19 workspace members (compile + document boundaries) | done | T-ARCH-001, T-ARCH-003 |
 | CI: `lint`, `unit-int` (ubuntu/macOS/Windows), `coverage`, `msrv` | done | §14.7 matrix, M0 subset |
@@ -353,7 +354,8 @@ registry + accounting are done, and the spec now agrees with where the provider 
 Next, in order:
 
 1. **The mock provider and its cassettes** are landed (`MockProvider`, five committed
-   scripts, live loopback proofs). What remains on the provider side: T-PROV-002/007/030/031
+   scripts, live loopback proofs). The headless one-shot is landed too (`run -p` with
+   three formats and 0/3/7 exits). What remains on the provider side: T-PROV-002/007/030/031
    need the message assembler (deltas → `ToolCall` blocks with §4.3 repair, caps and orphan
    checks — agent-side, lands with the turn loop), T-PROV-008's counting needs the same
    loop, and T-PROV-027's logged `warn` needs §12.1's logging.

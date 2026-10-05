@@ -62,13 +62,14 @@ struct Loop {
 }
 
 impl Loop {
-    /// Decide a fault: `true` starts another attempt. Sleeps the backoff
-    /// inside (cancellably); compacts immediately for the first
-    /// `ContextLength` instead of sleeping.
-    async fn handle_fault(&mut self, fault: ProviderError) -> bool {
+    /// Decide a fault: `Ok(())` starts another attempt, `Err` hands the fault
+    /// back for the caller — the loop re-publishes it for the end consumer
+    /// before the turn ends. Sleeps the backoff inside (cancellably);
+    /// compacts immediately for the first `ContextLength` instead.
+    async fn handle_fault(&mut self, fault: ProviderError) -> Result<(), ProviderError> {
         // REQ-PROV-006: nothing starts, sleeps, or continues after cancel.
         if self.cancel.is_cancelled() {
-            return false;
+            return Err(fault);
         }
         if fault.fault == ProviderFault::ContextLength && !self.compacted {
             self.compacted = true;
@@ -77,33 +78,33 @@ impl Loop {
                 // outside the backoff budget, which governs *waiting* —
                 // fixing the request is not waiting.
                 self.req = compact(&self.req);
-                return true;
+                return Ok(());
             }
             // No compactor: fall through to the matrix, which still allows
             // `ContextLength` its single retry.
         } else if fault.fault == ProviderFault::ContextLength {
             // The compacted resend failed the same way: fatal (T-PROV-037's
             // "second 400").
-            return false;
+            return Err(fault);
         }
         if !fault.fault.retryable() {
-            return false;
+            return Err(fault);
         }
         let attempt = self.retries_spent + 1;
         let Some(bounds) = delay_bounds(attempt, fault.fault, fault.retry_after) else {
-            return false;
+            return Err(fault);
         };
         let delay = sample_delay(&bounds, &mut self.rng);
         // REQ-PROV-005: never sleep past the deadline — surface the fault
         // instead of breaching the total budget.
         if self.budget.afford(delay).is_none() {
-            return false;
+            return Err(fault);
         }
         if sleep_backoff(delay, &self.cancel).await {
-            return false;
+            return Err(fault);
         }
         self.retries_spent = attempt;
-        true
+        Ok(())
     }
 }
 
@@ -161,14 +162,19 @@ pub fn stream_with_retry(
                 // decision now — the event it ended with was already yielded,
                 // in order.
                 if let Some(fault) = this.pending_fault.take() {
-                    if this.handle_fault(fault).await {
+                    let Err(fault) = this.handle_fault(fault).await else {
                         continue;
-                    }
+                    };
                     // Cancellation ends silently, exactly like the transport:
                     // the turn is dead, so there is nothing to record.
                     if this.cancel.is_cancelled() {
                         return None;
                     }
+                    // Re-publish the terminal fault for the end consumer:
+                    // taking consumed the adapter's copy when the attempt
+                    // failed, and the caller after the loop needs the code
+                    // and message for its report.
+                    this.provider.record_last_error(fault);
                     if this.error_finish_yielded {
                         return None;
                     }
@@ -333,6 +339,10 @@ mod tests {
 
         fn take_last_error(&self) -> Option<ProviderError> {
             self.last.lock().expect("last").take()
+        }
+
+        fn record_last_error(&self, error: ProviderError) {
+            *self.last.lock().expect("last") = Some(error);
         }
     }
 

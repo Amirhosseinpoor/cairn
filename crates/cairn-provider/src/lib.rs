@@ -87,6 +87,12 @@ pub trait Provider: Send + Sync + 'static {
     /// the next. `None` after a clean stream, before any call, or when the
     /// stream ended silently on cancellation.
     fn take_last_error(&self) -> Option<ProviderError>;
+
+    /// Re-publish a fault for the end consumer. The retry loop calls this
+    /// with the terminal fault when the turn fails: taking already consumed
+    /// the adapter's copy, and the caller after the loop still needs the
+    /// code and message for its report.
+    fn record_last_error(&self, error: ProviderError);
 }
 
 #[cfg(test)]

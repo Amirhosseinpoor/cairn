@@ -1,13 +1,23 @@
-//! Commands whose subsystems land after M0 (SPEC §11.1, §15.4).
+//! `cairn run` — M1's headless one-shot (SPEC §11.1, §15.4).
 //!
-//! Everything here either does real M0 work (argument checks, session lookup,
-//! offline gating) or fails with `E-IMPL-STAGE` naming the milestone that
-//! delivers it — never a silent success.
+//! One turn, no tools, no session writes: resolve the prompt, build the
+//! provider from config, stream the answer in the requested format, and exit
+//! 0/3/7 (T-CLI-010). Session replay (`--input`/`--session`) and the tool
+//! loop stay `E-IMPL-STAGE` for M3/M4.
+
+use std::io::Write;
+
+use futures::StreamExt;
+
+use cairn_core::cancel::CancellationToken;
+use cairn_core::error::{codes, ExitStatus};
+use cairn_core::message::{Block, Message, Role, StopReason};
+use cairn_provider::{stream_with_retry, StreamEvent};
 
 use crate::args::{ExportArgs, ResumeArgs, RunArgs, SessionsArgs, UpdateArgs};
 use crate::commands::{sessions, Startup};
 use crate::output::Fail;
-use cairn_core::error::{codes, ExitStatus};
+use crate::provide::{self, LiveProvider};
 
 /// `cairn run` — M0 validates input and the offline gate; the model loop is M1.
 pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<i32, Fail> {
@@ -43,11 +53,268 @@ pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<
             "pipe the prompt in, or use -p '<text>'".to_string(),
         ));
     }
+    if args.input.is_some() || args.session.is_some() {
+        return Err(Fail::not_implemented(
+            "`cairn run --input/--session` (session replay)",
+            "M3",
+        ));
+    }
+    let prompt = read_prompt(args)?;
+    let format = match cli.output.as_deref() {
+        None | Some("text") => OutputFormat::Text,
+        Some("json") => OutputFormat::Json,
+        Some("stream-json") => OutputFormat::StreamJson,
+        Some(other) => {
+            return Err(Fail::usage(
+                format!("--output {other} is not a run format"),
+                "use text, json, or stream-json".to_string(),
+            ));
+        }
+    };
 
-    Err(Fail::not_implemented(
-        "`cairn run` (provider + tool loop)",
-        "M1",
+    let live = provide::build(&startup.loaded.config)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            Fail::new(
+                "ERR_GENERIC",
+                ExitStatus::Generic,
+                format!("cannot start the async runtime: {error}"),
+                None,
+            )
+        })?;
+    let cancel = CancellationToken::new();
+    runtime.block_on(run_once(prompt, format, live, cancel))
+}
+
+/// `--output` for `run`: `text` streams model text, `json` prints one object
+/// at the end, `stream-json` prints one object per event (T-CLI-017).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Text,
+    Json,
+    StreamJson,
+}
+
+/// Read the prompt from `-p`, `--prompt-file` (with `-` for stdin), or
+/// `--stdin`. Exactly one source is enforced by clap; zero is exit 2 here.
+fn read_prompt(args: &RunArgs) -> Result<String, Fail> {
+    if let Some(text) = &args.prompt {
+        return Ok(text.clone());
+    }
+    if let Some(file) = &args.prompt_file {
+        if file.as_os_str() == "-" {
+            return read_stdin();
+        }
+        return std::fs::read_to_string(file).map_err(|error| {
+            use std::io::ErrorKind;
+            match error.kind() {
+                ErrorKind::NotFound => Fail::new(
+                    codes::FS_NOTFOUND,
+                    ExitStatus::NotFound,
+                    format!("prompt file {} does not exist", file.display()),
+                    Some("check the path, or pass the prompt with -p '<text>'".to_string()),
+                ),
+                ErrorKind::PermissionDenied => Fail::new(
+                    codes::FS_PERM,
+                    ExitStatus::Permission,
+                    format!("prompt file {} is not readable", file.display()),
+                    Some("check the file's permissions".to_string()),
+                ),
+                _ => Fail::new(
+                    "ERR_GENERIC",
+                    ExitStatus::Generic,
+                    format!("cannot read prompt file {}: {error}", file.display()),
+                    None,
+                ),
+            }
+        });
+    }
+    if args.stdin {
+        return read_stdin();
+    }
+    Err(Fail::usage(
+        "no prompt: pass -p TEXT, --prompt-file FILE, or --stdin",
+        "see `cairn run --help`".to_string(),
     ))
+}
+
+fn read_stdin() -> Result<String, Fail> {
+    std::io::read_to_string(std::io::stdin()).map_err(|error| {
+        Fail::new(
+            "ERR_GENERIC",
+            ExitStatus::Generic,
+            format!("cannot read stdin: {error}"),
+            None,
+        )
+    })
+}
+
+fn stop_name(stop: StopReason) -> &'static str {
+    match stop {
+        StopReason::EndTurn => "end_turn",
+        StopReason::ToolUse => "tool_use",
+        StopReason::MaxTokens => "max_tokens",
+        StopReason::ContentFilter => "content_filter",
+        StopReason::Cancelled => "cancelled",
+        StopReason::Error => "error",
+    }
+}
+
+/// One headless turn: stream the answer in `format`, and exit 0 on a clean
+/// finish, 3 on a model failure (T-CLI-010), 7 on cancel. The token comes
+/// from the caller so tests can raise it without signals.
+async fn run_once(
+    prompt: String,
+    format: OutputFormat,
+    live: LiveProvider,
+    cancel: CancellationToken,
+) -> Result<i32, Fail> {
+    let watcher = cancel.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        watcher.cancel();
+    });
+
+    let message = Message::new(Role::User, vec![Block::Text { text: prompt }], 1);
+    let mut request =
+        cairn_provider::ModelRequest::new(live.model_id.clone(), vec![message], live.max_tokens);
+    request.temperature = live.temperature;
+    let stream = stream_with_retry(
+        live.provider.clone(),
+        request,
+        cancel.clone(),
+        live.budget.clone(),
+        None,
+    );
+    let mut stream = Box::pin(stream);
+
+    let mut text = String::new();
+    let mut usage: Option<serde_json::Value> = None;
+    let mut stop: Option<StopReason> = None;
+    let mut failed = false;
+    while let Some(event) = stream.next().await {
+        match event {
+            StreamEvent::TextDelta { text: part } => {
+                text.push_str(&part);
+                if format == OutputFormat::Text {
+                    print!("{part}");
+                    let _ = std::io::stdout().flush();
+                } else if format == OutputFormat::StreamJson {
+                    println!(
+                        "{}",
+                        serde_json::json!({"type": "text_delta", "text": part})
+                    );
+                }
+            }
+            StreamEvent::ReasoningDelta { .. } | StreamEvent::ReasoningSignature { .. } => {
+                // Text mode shows the answer, not the thinking; the JSON
+                // modes carry the full event below.
+                if format == OutputFormat::StreamJson {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&event).expect("events serialise")
+                    );
+                }
+            }
+            StreamEvent::MessageStart { .. } | StreamEvent::Ping => {
+                if format == OutputFormat::StreamJson {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&event).expect("events serialise")
+                    );
+                }
+            }
+            StreamEvent::ToolCallStart { .. }
+            | StreamEvent::ToolCallDelta { .. }
+            | StreamEvent::ToolCallEnd { .. } => {
+                // M1 sends no tools, so a tool call here is the model
+                // freelancing — surfaced in the JSON modes, not executed.
+                if format == OutputFormat::StreamJson {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&event).expect("events serialise")
+                    );
+                }
+            }
+            StreamEvent::Usage {
+                input,
+                output,
+                cache_read,
+                cache_write,
+            } => {
+                usage = Some(serde_json::json!({
+                    "input": input,
+                    "output": output,
+                    "cache_read": cache_read,
+                    "cache_write": cache_write,
+                }));
+                if format == OutputFormat::StreamJson {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&event).expect("events serialise")
+                    );
+                }
+            }
+            StreamEvent::Finish { stop: reason } => {
+                if reason == StopReason::Error {
+                    failed = true;
+                } else {
+                    stop = Some(reason);
+                }
+                if format == OutputFormat::StreamJson {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&event).expect("events serialise")
+                    );
+                }
+            }
+        }
+    }
+    if format == OutputFormat::Text && !text.is_empty() && !text.ends_with('\n') {
+        println!();
+    }
+    if cancel.is_cancelled() && stop.is_none() && !failed {
+        // The stream ended silently, which only cancellation does.
+        return Ok(ExitStatus::Cancelled.code());
+    }
+    if failed {
+        let fault = live.provider.take_last_error();
+        return Err(model_failure(&live.model_id, fault));
+    }
+    let stop = stop.unwrap_or(StopReason::EndTurn);
+    if format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "model": live.model_id,
+                "text": text,
+                "usage": usage,
+                "stop": stop_name(stop),
+                "error": null,
+            })
+        );
+    }
+    Ok(ExitStatus::Ok.code())
+}
+
+/// A failed turn: the fault's stable code with exit 3 (T-CLI-010).
+fn model_failure(model_id: &str, fault: Option<cairn_provider::ProviderError>) -> Fail {
+    match fault {
+        Some(error) => Fail::new(
+            error.code().unwrap_or("ERR_GENERIC"),
+            ExitStatus::Provider,
+            format!("model `{model_id}` failed: {}", error.message),
+            Some("see `cairn doctor` for connectivity and credential checks".to_string()),
+        ),
+        None => Fail::new(
+            "ERR_GENERIC",
+            ExitStatus::Provider,
+            format!("model `{model_id}` failed without detail"),
+            None,
+        ),
+    }
 }
 
 /// `cairn chat` (and bare `cairn`) — the TUI is M3.
@@ -504,10 +771,8 @@ mod tests {
         let startup = startup_in(tmp.path());
         let cli = crate::args::Cli::parse_from(["cairn"]);
         assert!(chat(&cli, &startup).unwrap_err().message.contains("M3"));
-        assert!(run(&cli, &args(), &startup)
-            .unwrap_err()
-            .message
-            .contains("M1"));
+        // `run` landed in M1, so it is gone from the stub roll-call — what
+        // remains is proof the other two still name theirs.
         assert!(update(&UpdateArgs {
             check: false,
             version: None,
@@ -576,5 +841,65 @@ mod tests {
             export_destination(&cli).unwrap(),
             Some(std::path::PathBuf::from("out.json"))
         );
+    }
+    use crate::provide;
+
+    /// A cancelled token ends the turn silently with exit 7 — the signal
+    /// path only has to raise the token; everything after it is covered
+    /// here without signals.
+    #[tokio::test]
+    async fn a_cancelled_token_exits_7() {
+        let config = cairn_config::Config {
+            model: "openai/gpt-5.1-codex".to_string(),
+            ..cairn_config::Config::default()
+        };
+        let live = provide::build(&config).expect("builds without a key");
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let code = run_once("hi".to_string(), OutputFormat::Text, live, cancel)
+            .await
+            .expect("cancel exits, never fails");
+        assert_eq!(code, ExitStatus::Cancelled.code());
+    }
+
+    /// Failure codes come from the fault: the turn reports the stable
+    /// `E-*`, and `run` exits 3 (T-CLI-010).
+    #[test]
+    fn model_failures_carry_the_fault_code_at_exit_3() {
+        let error = cairn_provider::ProviderError::new(
+            cairn_provider::ProviderFault::Auth,
+            "bad key".to_string(),
+        );
+        let fail = model_failure("openai/gpt-5.1-codex", Some(error));
+        assert_eq!(fail.code, codes::PROV_AUTH);
+        assert_eq!(fail.exit, ExitStatus::Provider.code());
+    }
+
+    /// Stop reasons render `snake_case` for the JSON modes.
+    #[test]
+    fn stop_reasons_render_snake_case() {
+        assert_eq!(stop_name(StopReason::EndTurn), "end_turn");
+        assert_eq!(stop_name(StopReason::ToolUse), "tool_use");
+        assert_eq!(stop_name(StopReason::MaxTokens), "max_tokens");
+        assert_eq!(stop_name(StopReason::Error), "error");
+    }
+
+    /// No prompt source at all is a usage error, not a model call.
+    #[test]
+    fn a_missing_prompt_is_exit_2() {
+        let args = RunArgs {
+            prompt: None,
+            prompt_file: None,
+            stdin: false,
+            input: None,
+            session: None,
+            approve_plan: false,
+            max_iterations: None,
+            allow_ask: false,
+            input_fmt: "text".to_string(),
+            tee: false,
+        };
+        let err = read_prompt(&args).expect_err("no prompt fails");
+        assert_eq!(err.exit, ExitStatus::Usage.code());
     }
 }

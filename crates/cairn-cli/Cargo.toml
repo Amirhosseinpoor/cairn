@@ -14,11 +14,14 @@ path = "src/main.rs"
 [dependencies]
 cairn-core.workspace = true
 cairn-config.workspace = true
+cairn-provider.workspace = true
 cairn-session.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 
@@ -26,6 +29,7 @@ toml_edit.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

@@ -40,6 +40,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 cairn-core = { path = "crates/cairn-core", version = "0.1.0" }
 cairn-eventbus = { path = "crates/cairn-eventbus", version = "0.1.0" }
 cairn-config = { path = "crates/cairn-config", version = "0.1.0" }
+cairn-provider = { path = "crates/cairn-provider", version = "0.1.0" }
 cairn-session = { path = "crates/cairn-session", version = "0.1.0" }
 cairn-sse = { path = "crates/cairn-sse", version = "0.1.0" }
 # --- dev-dependencies ---

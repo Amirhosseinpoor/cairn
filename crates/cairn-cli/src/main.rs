@@ -17,6 +17,7 @@ macro_rules! yell {
 mod args;
 mod commands;
 mod output;
+mod provide;
 
 use clap::error::ErrorKind;
 use clap::Parser;
