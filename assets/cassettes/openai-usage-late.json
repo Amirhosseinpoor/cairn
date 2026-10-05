@@ -1,0 +1,11 @@
+{
+  "kind": "openai",
+  "model": "gpt-x",
+  "scenario": "T-PROV-011: the usage chunk arrives after finish_reason; the cost run must use it, not the estimate",
+  "steps": [
+    {"payload": "{\"id\":\"chatcmpl-1\",\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"},\"finish_reason\":null}]}"},
+    {"payload": "{\"id\":\"chatcmpl-1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}"},
+    {"payload": "{\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":12,\"prompt_tokens_details\":{\"cached_tokens\":5}},\"choices\":[]}"},
+    {"payload": "[DONE]"}
+  ]
+}

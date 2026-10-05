@@ -12,12 +12,18 @@ cairn-sse.workspace = true
 chrono.workspace = true
 futures.workspace = true
 rand.workspace = true
+regex.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# `test-util` for `#[tokio::test(start_paused)]` (virtual time in backoff
+# tests) — same pattern as `cairn-sse`; normal builds never see it.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

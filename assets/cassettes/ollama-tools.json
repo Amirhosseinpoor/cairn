@@ -1,0 +1,10 @@
+{
+  "kind": "ollama",
+  "model": "llama3.1",
+  "scenario": "T-PROV-035: NDJSON lines — text, one whole tool call, done with counts",
+  "steps": [
+    {"payload": "{\"model\":\"llama3.1\",\"message\":{\"role\":\"assistant\",\"content\":\"Checking.\"},\"done\":false}"},
+    {"payload": "{\"model\":\"llama3.1\",\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}}]},\"done\":false}"},
+    {"payload": "{\"model\":\"llama3.1\",\"message\":{\"role\":\"assistant\"},\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":40,\"eval_count\":9}"}
+  ]
+}

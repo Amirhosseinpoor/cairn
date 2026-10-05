@@ -21,8 +21,8 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **365 passed, 0 failed, 0 warnings** |
-| MSRV | `cargo +1.83.0 test --workspace` | 365 passed (D-01 / `rust-version`) |
+| Tests | `cargo test --workspace` | **379 passed, 0 failed, 0 warnings** |
+| MSRV | `cargo +1.83.0 test --workspace` | 379 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
 | Advisories | `cargo audit` | 0 vulnerabilities in 154 crates |
@@ -57,11 +57,11 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | `cairn-eventbus` | 6 |
 | `cairn-session` (M1) | 44 |
 | `cairn-sse` (M1) | 23 |
-| `cairn-provider` (M1) | 82 |
+| `cairn-provider` (M1) | 96 |
 | `cairn-cli` unit | 43 |
 | `cairn-cli` integration (`cli.rs`) | 33 |
 | `cairn-cli` architecture (`arch.rs`) | 12 |
-| **Total** | **365** |
+| **Total** | **379** |
 
 ### Documentation deliverables (§15.6)
 
@@ -153,6 +153,7 @@ testable — including the command `cairn doctor` points people at.
 | `cairn-provider::transport` — D-04's client and the POST path: `reqwest` 0.12 with `default-features = false` (`rustls-tls-webpki-roots`, `stream`, `gzip`, `http2`), 10 s connect timeout, `ca_bundle` PEM added to the bundle; non-2xx mapped by `error_for_status` (exact `E-PROV-AUTH` message, 400 refinement to `ContextLength`/`ContentFilter`, `Retry-After` captured on 429); bytes pumped through `SseStream` (idle + 50 ms cancel poll) into the decoder, Ollama's NDJSON reframed line-by-line so the same policy applies; mid-stream failures end with `Finish { stop: Error }`, EOF-without-terminator records `Unreachable` (§4.7), cancellation ends silently; covered live against loopback | done | §4.3, §4.5, T-PROV-034, T-PROV-037, T-PROV-045 |
 | Five §4.4 adapters — Anthropic/OpenAI/compat/Ollama/vLLM over one `Core`: registry resolution (alias-aware, `""` base_url means default), `health()` with no network (`UnknownModel`/`Misconfigured`/`NoCredentials`, Ollama keyless per §4.10), `stream()` refusing before any socket, `capabilities()` from the registry row, `count_tokens()` local; pure shaping snapshots (Anthropic system breakpoint + tool blocks, OpenAI `include_usage` + o-series `max_completion_tokens`, Ollama object args + `num_predict`); `env_key` covers §4.10 steps 1–2 | done | T-PROV-003, §4.4, §4.10 |
 | §4.5 retry loop — `stream_with_retry` drives `Provider::stream` under the matrix: attempts never overlap, setup and mid-stream faults share one path, `ContextLength` compacts once and resends immediately (fatal on the second), backoffs sleep in 250 ms steps so cancel wins (REQ-PROV-006), budget exhaustion and fatal faults end the turn with one synthesised `Finish { stop: Error }` when no bytes flowed, cancellation always silent; new `Truncated` fault (shares `E-PROV-NET`, one retry) for clean EOF without terminator or stop | done | T-FAULT-001, T-FAULT-004, T-FAULT-006, T-PROV-006, T-PROV-033, T-PROV-037, §4.5, REQ-PROV-005, REQ-PROV-009 |
+| Mock provider + cassettes + §4.6 fallback — `MockProvider` plays committed `assets/cassettes/*.json` scripts through the real `WireDecoder` (payloads, setup errors, mid-stream faults with recording, per-call buffering); `fallback_section`/`extract_prompt_tool_call`/`format_tool_result` implement §4.6 exactly (first block wins, bad JSON classifies for the turn loop's two-repair budget), and adapters with `tool_calling == false` shape tools into the system prompt instead of native parameters; live loopback proofs for T-PROV-006 (cancel ≤ 250 ms), T-PROV-009 (disconnect replays whole turn, 2 connections), T-PROV-033 (500/503/200 across 3 connections), T-PROV-011 (late usage overrides estimate in cost) | done | T-PROV-001, T-PROV-004, T-PROV-006, T-PROV-009, T-PROV-011, T-PROV-033, T-PROV-035, T-FAULT-001, §4.6, §4.7 |
 
 ### Decisions taken while landing the session store
 
@@ -287,6 +288,13 @@ own: a section that claims completeness, and does not have it.
     gains tokio (time only). A call that never gets its first byte still ends with one terminal
     `Finish { stop: Error }`; cancellation ends silently. Implemented as
     `cairn-provider::retry_loop::stream_with_retry`.
+22. **REQ-PROV-009 discards "any partial text" without saying where a partial turn starts in
+    a retried stream, and §4.6's extractor classifies blocks without saying who counts the
+    bad ones toward the two-repairs budget**
+    → §4.7 states the turn boundary (a `MessageStart` after `Finish { stop: Error }` opens the
+    new turn). The bad-block counting and session-scoped disable (`E-PROV-FALLBACK`) stay with
+    the turn loop, which owns the session — `cairn-provider::fallback` classifies, the loop
+    counts. Covered by the mock cassettes and live loopback proofs.
 
 ## Known limitations of the M0 delivery
 
@@ -344,10 +352,11 @@ The session store, `cairn-sse`, the boxed `Provider` trait, §4.5's retry policy
 registry + accounting are done, and the spec now agrees with where the provider code belongs.
 Next, in order:
 
-1. **The mock provider and its cassettes**, so T-PROV-001..048 and T-FAULT-001..006 can run
-   without a live key. The transport is covered live against loopback and the retry loop
-   against a scripted fake; the mock serves recorded SSE/NDJSON shapes for the remaining
-   rows (T-PROV-002/004/006/008/009/011 and the fault-table rest).
+1. **The mock provider and its cassettes** are landed (`MockProvider`, five committed
+   scripts, live loopback proofs). What remains on the provider side: T-PROV-002/007/030/031
+   need the message assembler (deltas → `ToolCall` blocks with §4.3 repair, caps and orphan
+   checks — agent-side, lands with the turn loop), T-PROV-008's counting needs the same
+   loop, and T-PROV-027's logged `warn` needs §12.1's logging.
 2. **User-model bridging and the compat probe.** Adapters resolve against the bare
    registry: a user-defined `models.<id>` (REQ-PROV-013's escape hatch) and a proxy's
    declared capabilities need the `run` wiring, which owns the full `Config`, to reach

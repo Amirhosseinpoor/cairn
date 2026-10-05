@@ -402,7 +402,7 @@ mod tests {
 
     /// T-PROV-033's shape: two 500s, then success. The consumer sees the
     /// winning attempt's events; the two failures cost backoffs, not turns.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn retryable_setup_errors_retry_then_succeed() {
         let provider = Arc::new(FakeProvider::new(vec![
             failed(ProviderFault::Server),
@@ -435,7 +435,7 @@ mod tests {
 
     /// T-FAULT-004's shape: 500s until the row's budget is spent — one call
     /// plus five retries — then the turn ends as an error.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn server_errors_stop_after_five_retries() {
         let provider = Arc::new(FakeProvider::new(vec![
             failed(ProviderFault::Server),
@@ -458,7 +458,7 @@ mod tests {
     /// T-PROV-006: cancelling mid-backoff aborts the sleep — the assertion is
     /// on wall time, because a 30 s floor that slept through cancel would
     /// take this test with it.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn cancel_during_backoff_aborts_without_retry() {
         // A floor the loop could never sleep out: cancelling must win.
         let mut error = ProviderError::new(ProviderFault::RateLimited, "scripted");
@@ -621,7 +621,7 @@ mod tests {
 
     /// `MalformedStream` gets its single retry, then the turn ends — "after 1
     /// retry → fatal", exactly as the matrix budgets it.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn malformed_aborts_after_one_retry() {
         let provider = Arc::new(FakeProvider::new(vec![
             failed(ProviderFault::MalformedStream),
@@ -635,5 +635,181 @@ mod tests {
                 stop: StopReason::Error,
             }]
         );
+    }
+    /// Serve `responses` in connection order on loopback, counting accepts.
+    /// Each response is written whole after draining the request, then the
+    /// connection closes — except responses flagged to truncate, which stop
+    /// mid-body.
+    fn serve_scripted(responses: Vec<(Vec<u8>, bool)>, connections: Arc<AtomicUsize>) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback");
+        let address = listener.local_addr().expect("loopback addr");
+        std::thread::spawn(move || {
+            for (response, truncate) in responses {
+                let Ok((mut socket, _)) = listener.accept() else {
+                    return;
+                };
+                connections.fetch_add(1, Ordering::SeqCst);
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if socket.read_exact(&mut byte).is_err() || head.len() > 1 << 20 {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let length = String::from_utf8_lossy(&head)
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut body = vec![0u8; length.min(1 << 20)];
+                if !body.is_empty() && socket.read_exact(&mut body).is_err() {
+                    return;
+                }
+                if truncate {
+                    // Cut the body, never the head: a truncated status line
+                    // is a setup failure, not a mid-stream disconnect.
+                    let split = response
+                        .windows(4)
+                        .position(|window| window == b"\r\n\r\n")
+                        .map_or(response.len(), |at| at + 4);
+                    let cut = split + (response.len() - split) / 2;
+                    socket.write_all(&response[..cut]).ok();
+                } else {
+                    socket.write_all(&response).ok();
+                }
+            }
+        });
+        format!("http://{address}")
+    }
+
+    fn sse_200(body: &str) -> (Vec<u8>, bool) {
+        (
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes(),
+            false,
+        )
+    }
+
+    /// T-PROV-009: the first connection dies after three deltas; the retry
+    /// replays the whole turn against the second, and the session never sees
+    /// a partial assistant message — at event level, two complete turns with
+    /// the failed one explicitly closed.
+    #[tokio::test]
+    async fn disconnect_after_three_deltas_replays_the_turn() {
+        use crate::adapters::OpenaiAdapter;
+
+        let partial = concat!(
+            "data: {\"id\":\"c\",\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"b\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"c\"},\"finish_reason\":null}]}\n\n",
+        );
+        let whole = concat!(
+            "data: {\"id\":\"c\",\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"abc\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let connections = Arc::new(AtomicUsize::new(0));
+        let url = serve_scripted(
+            vec![(sse_200(partial).0, true), sse_200(whole)],
+            Arc::clone(&connections),
+        );
+        let registry = cairn_core::registry::bundled();
+        let adapter = OpenaiAdapter::new(
+            "openai/gpt-5.1-codex",
+            registry,
+            Some("key".to_string()),
+            None,
+            Some(url),
+        );
+        let events: Vec<StreamEvent> = tokio::time::timeout(
+            Duration::from_secs(30),
+            stream_with_retry(
+                Arc::new(adapter),
+                ModelRequest::new("openai/gpt-5.1-codex", Vec::new(), 10),
+                CancellationToken::new(),
+                RetryBudget::new(),
+                None,
+            )
+            .collect::<Vec<_>>(),
+        )
+        .await
+        .expect("the retry wins");
+        assert_eq!(connections.load(Ordering::SeqCst), 2);
+        let starts = events
+            .iter()
+            .filter(|event| matches!(event, StreamEvent::MessageStart { .. }))
+            .count();
+        assert_eq!(starts, 2, "the replay starts a second turn: {events:?}");
+        assert!(events.contains(&StreamEvent::Finish {
+            stop: StopReason::Error,
+        }));
+        assert!(events.contains(&StreamEvent::Finish {
+            stop: StopReason::EndTurn,
+        }));
+    }
+
+    /// T-PROV-033's live shape: 500, 503, then the winning turn — three
+    /// connections, real backoffs, attempts visible on the wire.
+    #[tokio::test]
+    async fn status_errors_then_success_across_connections() {
+        use crate::adapters::OpenaiAdapter;
+
+        let failure = |status: &str| {
+            (
+                format!("HTTP/1.1 {status}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}")
+                    .into_bytes(),
+                false,
+            )
+        };
+        let whole = concat!(
+            "data: {\"id\":\"c\",\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Back\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let connections = Arc::new(AtomicUsize::new(0));
+        let url = serve_scripted(
+            vec![
+                failure("500 Internal Server Error"),
+                failure("503 Service Unavailable"),
+                sse_200(whole),
+            ],
+            Arc::clone(&connections),
+        );
+        let registry = cairn_core::registry::bundled();
+        let adapter = OpenaiAdapter::new(
+            "openai/gpt-5.1-codex",
+            registry,
+            Some("key".to_string()),
+            None,
+            Some(url),
+        );
+        let events: Vec<StreamEvent> = tokio::time::timeout(
+            Duration::from_secs(30),
+            stream_with_retry(
+                Arc::new(adapter),
+                ModelRequest::new("openai/gpt-5.1-codex", Vec::new(), 10),
+                CancellationToken::new(),
+                RetryBudget::new(),
+                None,
+            )
+            .collect::<Vec<_>>(),
+        )
+        .await
+        .expect("the third attempt wins");
+        assert_eq!(connections.load(Ordering::SeqCst), 3);
+        assert!(events.contains(&StreamEvent::TextDelta {
+            text: "Back".to_string()
+        }));
+        assert!(events.contains(&StreamEvent::Finish {
+            stop: StopReason::EndTurn,
+        }));
     }
 }

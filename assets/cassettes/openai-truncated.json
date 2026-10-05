@@ -1,0 +1,8 @@
+{
+  "kind": "openai",
+  "model": "gpt-x",
+  "scenario": "T-FAULT-006: chunks arrive, then the stream ends with no finish_reason and no [DONE]",
+  "steps": [
+    {"payload": "{\"id\":\"c\",\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}"}
+  ]
+}

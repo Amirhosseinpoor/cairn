@@ -27,6 +27,7 @@ use cairn_core::registry::{ProviderKind, Registry};
 
 use crate::accounting::estimate_request;
 use crate::error::{ProviderError, ProviderFault};
+use crate::fallback::fallback_section;
 use crate::transport::{self, Request};
 use crate::types::{
     Capabilities, ModelRequest, ProviderHealth, ProviderId, StreamEvent, TokenCount, ToolSpec,
@@ -213,7 +214,12 @@ impl Core {
             let request = Request {
                 url,
                 headers: self.headers(resolved),
-                body: shape_body(self.shape, &resolved.model, &req),
+                body: shape_body(
+                    self.shape,
+                    &resolved.model,
+                    resolved.capabilities.tool_calling,
+                    &req,
+                ),
             };
             transport::post_events(
                 client,
@@ -630,7 +636,29 @@ impl Provider for VllmAdapter {
 // ------------------------------------------------------------------ shaping
 
 /// Shape one neutral request into one provider's JSON body (§4.4).
-fn shape_body(shape: Shape, canonical: &str, req: &ModelRequest) -> Value {
+fn shape_body(shape: Shape, canonical: &str, tool_calling: bool, req: &ModelRequest) -> Value {
+    if !req.tools.is_empty() && !tool_calling {
+        // §4.6: no native `tools` parameter on this model. The definitions
+        // move into the system prompt as the fallback section (a plain system
+        // message, which every column already shapes), the native parameters
+        // stay off, and results come back as `<tool_result>` text for the
+        // extractor — so one code path shapes both worlds.
+        let mut fallen = req.clone();
+        let section = fallback_section(&fallen.tools);
+        fallen.tools.clear();
+        let turn = fallen.turn_id;
+        fallen.messages.push(Message::new(
+            Role::System,
+            vec![Block::Text { text: section }],
+            turn,
+        ));
+        return shape_native(shape, canonical, &fallen);
+    }
+    shape_native(shape, canonical, req)
+}
+
+/// The native-tool-call half of [`shape_body`].
+fn shape_native(shape: Shape, canonical: &str, req: &ModelRequest) -> Value {
     let api_model = canonical.rsplit('/').next().unwrap_or(canonical);
     match shape {
         Shape::Anthropic => anthropic_body(api_model, req),
@@ -1234,6 +1262,7 @@ mod tests {
         let body = shape_body(
             Shape::Anthropic,
             "anthropic/claude-sonnet-4-5",
+            true,
             &fixture_request(),
         );
         assert_eq!(body["model"], "claude-sonnet-4-5");
@@ -1261,7 +1290,12 @@ mod tests {
     /// spelling per model, `auto` choice, and the fanned-out `tool` message.
     #[test]
     fn openai_shaping_matches_the_column() {
-        let body = shape_body(Shape::Openai, "openai/gpt-5.1-codex", &fixture_request());
+        let body = shape_body(
+            Shape::Openai,
+            "openai/gpt-5.1-codex",
+            true,
+            &fixture_request(),
+        );
         assert_eq!(body["stream_options"]["include_usage"], true);
         assert_eq!(body["max_tokens"], 100);
         assert!(body.get("max_completion_tokens").is_none());
@@ -1275,7 +1309,7 @@ mod tests {
         assert_eq!(messages[3]["tool_call_id"], "c1");
         assert_eq!(messages[3]["content"], "sunny");
 
-        let body = shape_body(Shape::Openai, "openai/o4-mini", &fixture_request());
+        let body = shape_body(Shape::Openai, "openai/o4-mini", true, &fixture_request());
         assert_eq!(body["max_completion_tokens"], 100);
         assert!(body.get("max_tokens").is_none());
     }
@@ -1290,7 +1324,7 @@ mod tests {
             data_b64: "aGk=".to_string(),
             alt: None,
         });
-        let body = shape_body(Shape::Ollama, "ollama/qwen2.5-coder:14b", &req);
+        let body = shape_body(Shape::Ollama, "ollama/qwen2.5-coder:14b", true, &req);
         assert_eq!(body["model"], "qwen2.5-coder:14b");
         assert_eq!(body["stream"], true);
         assert_eq!(body["options"]["num_predict"], 100);
@@ -1318,5 +1352,38 @@ mod tests {
             .expect("estimates");
         assert!(count.estimated, "REQ-PROV-011's flag");
         assert!(count.input > 0);
+    }
+    /// T-PROV-004's shaping half: a model with `tool_calling == false` sends
+    /// no native `tools` — the definitions move into the system prompt as
+    /// §4.6's section instead. (Extraction and injection are `fallback`'s;
+    /// the per-turn counting is the turn loop's.)
+    #[test]
+    fn fallback_models_shape_tools_into_the_system_prompt() {
+        let body = shape_body(Shape::Openai, "some/proxy-model", false, &fixture_request());
+        assert!(body.get("tools").is_none(), "no native parameter");
+        assert!(body.get("tool_choice").is_none());
+        let sectioned = body["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter(|message| message["role"] == "system")
+            .any(|message| {
+                message["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("Available tools:")
+            });
+        assert!(sectioned, "the section is a system message");
+
+        let body = shape_body(Shape::Anthropic, "some/claude", false, &fixture_request());
+        assert!(body.get("tools").is_none());
+        assert!(
+            body["system"]
+                .as_array()
+                .expect("system")
+                .iter()
+                .any(|block| block["text"].as_str().unwrap_or("").contains("<tool>")),
+            "the section is the system parameter"
+        );
     }
 }

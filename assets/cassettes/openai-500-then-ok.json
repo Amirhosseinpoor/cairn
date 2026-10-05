@@ -1,0 +1,13 @@
+{
+  "kind": "openai",
+  "model": "gpt-x",
+  "scenario": "T-PROV-033 shape: two 500s, then the winning turn",
+  "steps": [
+    {"setup_error": {"fault": "Server", "message": "internal error"}},
+    {"setup_error": {"fault": "Server", "message": "try again"}},
+    {"payload": "{\"id\":\"c\",\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Recovered\"},\"finish_reason\":null}]}"},
+    {"payload": "{\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}"},
+    {"payload": "{\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1},\"choices\":[]}"},
+    {"payload": "[DONE]"}
+  ]
+}

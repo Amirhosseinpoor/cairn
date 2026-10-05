@@ -445,8 +445,6 @@ fn pump(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
 
     /// §4.5's status rows, through the transport's mapping: the fault, and
     /// `E-PROV-AUTH`'s exact fixed message.
@@ -549,46 +547,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Serve one canned HTTP response on loopback and return its base URL.
-    /// The server thread reads the whole request — head plus exactly the
-    /// body's `Content-Length` — before answering. Answering while the client
-    /// is still sending closes the socket with unread inbound data, which
-    /// some platforms answer with RST and fail the request.
-    fn serve(response: Vec<u8>) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback");
-        let address = listener.local_addr().expect("loopback addr");
-        std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().expect("one client");
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") {
-                if socket.read_exact(&mut byte).is_err() || head.len() > 1 << 20 {
-                    return;
-                }
-                head.push(byte[0]);
-            }
-            let length = String::from_utf8_lossy(&head)
-                .lines()
-                .filter_map(|line| line.split_once(':'))
-                .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
-                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
-                .unwrap_or(0);
-            let mut body = vec![0u8; length.min(1 << 20)];
-            if !body.is_empty() && socket.read_exact(&mut body).is_err() {
-                return;
-            }
-            socket.write_all(&response).ok();
-        });
-        format!("http://{address}")
-    }
-
-    fn sse_response(body: &str) -> Vec<u8> {
-        format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-            body.len()
-        )
-        .into_bytes()
-    }
+    use crate::mock::{serve_for_test as serve, sse_response_for_test as sse_response};
 
     fn post_against(url: String, body: &str) -> (Request, Arc<Mutex<Option<ProviderError>>>) {
         (
@@ -745,5 +704,74 @@ mod tests {
                 "data: {\"c\":3}\n\n",
             ]
         );
+    }
+    /// T-PROV-006's stream half: cancelling mid-stream ends the collection
+    /// inside §4.3's 250 ms — the server is still holding the connection
+    /// open, and nothing arrives after the cancel.
+    #[tokio::test]
+    async fn cancel_mid_stream_ends_inside_250ms() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback");
+        let address = listener.local_addr().expect("loopback addr");
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut socket, _) = listener.accept().expect("one client");
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                if socket.read_exact(&mut byte).is_err() {
+                    return;
+                }
+                head.push(byte[0]);
+            }
+            // One event, flushed, then hold the connection open: the client
+            // cancels against a live stream, not a closed one.
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+                )
+                .ok();
+            socket.write_all(b"data: {\"model\":\"m\"}\n\n").ok();
+            socket.flush().ok();
+            std::thread::sleep(Duration::from_secs(30));
+        });
+
+        let client = build_client(None).expect("client");
+        let (request, _) = post_against(format!("http://{address}"), "cancel");
+        let cancel = CancellationToken::new();
+        let stream = post_events(
+            &client,
+            "test",
+            request,
+            ProviderKind::Openai,
+            cancel.clone(),
+            Arc::new(Mutex::new(None)),
+        )
+        .await
+        .expect("200 streams");
+        let mut stream = Box::pin(stream);
+        let first = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("first event arrives")
+            .expect("stream yields");
+        assert!(
+            matches!(first, StreamEvent::MessageStart { .. }),
+            "the held stream still opens: {first:?}"
+        );
+        // The measured window starts at the cancel: the 50 ms poll observes
+        // it, the stream ends, and nothing else arrives.
+        let at = std::time::Instant::now();
+        cancel.cancel();
+        let rest: Vec<StreamEvent> =
+            tokio::time::timeout(Duration::from_secs(10), stream.collect::<Vec<_>>())
+                .await
+                .expect("cancel ends the stream");
+        assert!(
+            at.elapsed() <= Duration::from_millis(250),
+            "cancel-to-end {:?} exceeds §4.3's budget",
+            at.elapsed()
+        );
+        assert!(rest.is_empty(), "nothing arrives after cancel");
     }
 }
