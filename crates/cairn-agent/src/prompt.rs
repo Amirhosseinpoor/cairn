@@ -20,6 +20,8 @@ pub struct PromptVars<'a> {
     pub tools: &'a [ToolDef],
     /// The merged project instructions (§5.7), when there are any.
     pub instructions: Option<&'a str>,
+    /// The ranked file map (§5.2), when the index is ready.
+    pub repo_map: Option<&'a str>,
 }
 
 /// §7.1's mode rules, as the model should read them.
@@ -85,6 +87,13 @@ pub fn system_prompt(vars: &PromptVars<'_>) -> String {
         out.push_str(instructions.trim());
         out.push_str("\n\n");
     }
+    if let Some(map) = vars.repo_map.filter(|m| !m.trim().is_empty()) {
+        out.push_str(
+            "# Repository map (most relevant files first; symbols come from a parser and may be incomplete)\n",
+        );
+        out.push_str(map.trim_end());
+        out.push_str("\n\n");
+    }
     out.push_str("# Tools available right now\n");
     out.push_str(&tools);
     out.push_str("\n\n# Mode rules\n");
@@ -129,6 +138,7 @@ mod tests {
             model_id: "m/x",
             tools,
             instructions: None,
+            repo_map: None,
         }
     }
 
@@ -168,6 +178,22 @@ mod tests {
         assert!(!text.contains("It is numbered"), "only the first sentence");
         assert!(text.contains("- `grep` — Search contents."));
         assert!(system_prompt(&vars(Mode::Build, &[])).contains("(none — answer in text)"));
+    }
+
+    #[test]
+    fn the_repo_map_appears_between_instructions_and_tools() {
+        let mut v = vars(Mode::Build, &[]);
+        assert!(!system_prompt(&v).contains("Repository map"));
+        v.instructions = Some("Use tabs.");
+        v.repo_map = Some("src/a.rs\n  1: fn a()\n");
+        let text = system_prompt(&v);
+        let (i, m, t) = (
+            text.find("Project instructions").unwrap(),
+            text.find("# Repository map").unwrap(),
+            text.find("# Tools available").unwrap(),
+        );
+        assert!(i < m && m < t);
+        assert!(text.contains("src/a.rs\n  1: fn a()"));
     }
 
     #[test]

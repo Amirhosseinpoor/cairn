@@ -500,6 +500,70 @@ fn load_instructions(
     Some(text)
 }
 
+/// How long a run waits for the index before going without a map.
+const INDEX_WAIT: std::time::Duration = std::time::Duration::from_millis(2500);
+
+/// §5.2: the repository map for the system prompt, ranked for this prompt.
+/// The index is scanned first (a warm one costs milliseconds); a scan that is
+/// not done in [`INDEX_WAIT`] is abandoned for this run (REQ-CTX-009).
+async fn repo_map_text(
+    plan: &Plan,
+    budget: Option<&cairn_context::budget::Budget>,
+) -> Option<String> {
+    let cfg = &plan.config.repo_map;
+    if !cfg.enabled || cfg.top_k == 0 {
+        return None;
+    }
+    let db = if plan.config.index.db_path.trim().is_empty() {
+        cairn_index::cache_path(&plan.paths.cache_home, &plan.workspace)
+    } else {
+        PathBuf::from(plan.config.index.db_path.trim())
+    };
+    let workspace = plan.workspace.clone();
+    let config = plan.config.clone();
+    let query_text = plan.prompt.clone().unwrap_or_default();
+    let tokens = budget.map_or(cfg.max_tokens, |b| b.repo_map.min(cfg.max_tokens));
+    let work = tokio::task::spawn_blocking(move || {
+        let index = cairn_index::Index::open(&db, &workspace).ok()?;
+        let engine = crate::toolkit::ignore_engine(&config, &workspace);
+        index.set_params(cairn_index::Params {
+            damping: config.repo_map.pagerank_damping,
+            iterations: config.repo_map.pagerank_iterations as usize,
+            current_file: config.repo_map.personalization.current_file,
+            touched: config.repo_map.personalization.touched,
+            uniform: config.repo_map.personalization.uniform,
+            pagerank_share: config.repo_map.weights.page,
+            bm25_share: config.repo_map.weights.bm25,
+            k1: config.repo_map.bm25.k1,
+            b: config.repo_map.bm25.b,
+            name_boost: config.repo_map.bm25.name_boost,
+            path_boost: config.repo_map.bm25.path_boost,
+            signature_boost: config.repo_map.bm25.signature_boost,
+            doc_boost: config.repo_map.bm25.doc_boost,
+        });
+        let options = cairn_index::ScanOptions {
+            max_file_bytes: config
+                .discovery
+                .max_file_size_bytes
+                .min(cairn_index::MAX_FILE_BYTES),
+            ..cairn_index::ScanOptions::default()
+        };
+        index.scan(&engine, &options).ok()?;
+        let query = cairn_index::Query {
+            text: &query_text,
+            top_k: config.repo_map.top_k as usize,
+            ..cairn_index::Query::default()
+        };
+        let map = cairn_context::repo_map::build(&index, &query, tokens);
+        (map.files > 0).then_some(map.text)
+    });
+    tokio::time::timeout(INDEX_WAIT, work)
+        .await
+        .ok()?
+        .ok()
+        .flatten()
+}
+
 /// Run one headless turn; returns the process exit code (0 / 7) or the
 /// failure to report (3 provider, 4 guardrail, 6 denied, 9 session, 13
 /// flush, ...).
@@ -585,6 +649,7 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
     let window = plan.live.provider.capabilities().max_context;
     let token_budget = (window > 0).then(|| cairn_context::budget::Budget::for_window(window));
     let instructions = load_instructions(&plan, token_budget.as_ref());
+    let repo_map = repo_map_text(&plan, token_budget.as_ref()).await;
     let system = system_prompt(&PromptVars {
         mode: plan.run_mode,
         workspace_root: &root,
@@ -595,6 +660,7 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         model_id: &plan.live.model_id,
         tools: &tools,
         instructions: instructions.as_deref(),
+        repo_map: repo_map.as_deref(),
     });
     let mut messages = vec![Message::new(
         Role::System,

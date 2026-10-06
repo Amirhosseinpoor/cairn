@@ -8,6 +8,26 @@ license.workspace = true
 
 [dependencies]
 cairn-core.workspace = true
+cairn-parse.workspace = true
+cairn-search.workspace = true
+rusqlite.workspace = true
+rayon.workspace = true
+streaming-iterator.workspace = true
+notify.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-cpp.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+rusqlite.workspace = true
 
 [lints]
 workspace = true

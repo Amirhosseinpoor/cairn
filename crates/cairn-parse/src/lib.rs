@@ -112,7 +112,8 @@ impl Lang {
         }
     }
 
-    fn grammar(self) -> Option<Language> {
+    #[must_use]
+    pub fn grammar(self) -> Option<Language> {
         Some(match self {
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
             Self::Python => tree_sitter_python::LANGUAGE.into(),

@@ -36,6 +36,9 @@ allow = [
     # bundled-roots choice requires: permissive, no copyleft obligations —
     # the same rule that admitted Unicode-3.0.
     "CDLA-Permissive-2.0",
+    # `notify` (§5.3's file watcher, which the spec names) is CC0-1.0: a
+    # public-domain dedication, the most permissive licence there is.
+    "CC0-1.0",
 ]
 
 [bans]

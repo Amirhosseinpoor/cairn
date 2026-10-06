@@ -3015,3 +3015,75 @@ fn agents_md_files_are_merged_into_the_system_prompt() {
     assert!(!system.contains("sk-abcdefghijkl"), "secrets are redacted");
     assert!(system.contains("***REDACTED***"));
 }
+
+/// §5.2 end to end: the system prompt carries a map ranked for the prompt, and
+/// a second run reuses the cached index.
+#[test]
+fn the_system_prompt_carries_a_repository_map_ranked_for_the_prompt() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 2, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    std::fs::create_dir_all(fx.ws.join("src")).expect("dir");
+    std::fs::write(
+        fx.ws.join("src/parser.rs"),
+        "/// Turns text into a tree.\npub struct Parser { pos: usize }\nimpl Parser {\n    pub fn parse(&mut self) {}\n}\n",
+    )
+    .expect("parser");
+    std::fs::write(fx.ws.join("src/render.rs"), "pub fn render_screen() {}\n").expect("render");
+    std::fs::write(fx.ws.join("notes.md"), "# notes\n").expect("notes");
+    let (out, _) = run_json(&fx, &["-p", "fix the parser"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let sent: serde_json::Value =
+        serde_json::from_slice(&bodies.lock().expect("bodies")[0]).expect("body");
+    let system = sent["messages"][0]["content"].as_str().expect("system");
+    assert!(system.contains("# Repository map"), "{system}");
+    let parser_at = system.find("src/parser.rs").expect("parser listed");
+    let render_at = system.find("src/render.rs").expect("render listed");
+    assert!(
+        parser_at < render_at,
+        "the file the prompt is about comes first"
+    );
+    assert!(
+        system.contains("2: pub struct Parser") || system.contains("2: struct Parser"),
+        "{system}"
+    );
+    assert!(system.contains("pub fn parse(&mut self)"), "{system}");
+    assert!(
+        !system.contains("notes.md"),
+        "files with no symbols are left out"
+    );
+    // A second run finds the index in the cache.
+    let (out, _) = run_json(&fx, &["-p", "fix the parser again"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let sent: serde_json::Value =
+        serde_json::from_slice(&bodies.lock().expect("bodies")[1]).expect("body");
+    assert!(sent["messages"][0]["content"]
+        .as_str()
+        .expect("system")
+        .contains("src/parser.rs"));
+}
+
+/// `repo_map.enabled = false` leaves the map out.
+#[test]
+fn the_repository_map_can_be_turned_off() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    std::fs::write(fx.ws.join("a.rs"), "pub fn alpha() {}\n").expect("file");
+    std::fs::create_dir_all(fx.ws.join(".cairn")).expect("dir");
+    std::fs::write(
+        fx.ws.join(".cairn/config.toml"),
+        "[repo_map]\nenabled = false\n",
+    )
+    .expect("config");
+    let (out, _) = run_json(&fx, &["-p", "hi"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let sent: serde_json::Value =
+        serde_json::from_slice(&bodies.lock().expect("bodies")[0]).expect("body");
+    assert!(!sent["messages"][0]["content"]
+        .as_str()
+        .expect("system")
+        .contains("# Repository map"));
+}

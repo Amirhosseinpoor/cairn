@@ -43,6 +43,22 @@ fn env(key: &str) -> Option<String> {
 /// A volume that folds case: protected-path and rule globs must too.
 const CASE_INSENSITIVE_FS: bool = cfg!(any(windows, target_os = "macos"));
 
+/// The ignore rules of §5.1 for `root`, with the user's global ignore file and
+/// the `discovery.include`/`exclude` globs.
+#[must_use]
+pub fn ignore_engine(config: &Config, root: &Path) -> IgnoreEngine {
+    let home = expand_tilde("~", &env);
+    let xdg = env("XDG_CONFIG_HOME").map(PathBuf::from);
+    IgnoreEngine::new(
+        root,
+        &IgnoreOptions {
+            global_file: Some(default_global_ignore(&home, xdg.as_deref())),
+            include: config.discovery.include.clone(),
+            exclude: config.discovery.exclude.clone(),
+        },
+    )
+}
+
 /// Build the executor for one invocation.
 ///
 /// # Errors
@@ -69,15 +85,7 @@ pub fn build(wiring: &Wiring<'_>) -> Result<Arc<Executor>, Fail> {
     .map_err(|e| Fail::new(e.code, ExitStatus::Generic, e.message, e.recovery))?;
     let boundary = Arc::new(boundary);
 
-    let xdg = env("XDG_CONFIG_HOME").map(PathBuf::from);
-    let ignore = Arc::new(IgnoreEngine::new(
-        boundary.root(),
-        &IgnoreOptions {
-            global_file: Some(default_global_ignore(&home, xdg.as_deref())),
-            include: config.discovery.include.clone(),
-            exclude: config.discovery.exclude.clone(),
-        },
-    ));
+    let ignore = Arc::new(ignore_engine(config, boundary.root()));
 
     let files = PolicyFiles {
         project: Some(wiring.workspace.join(".cairn").join("permissions.json")),

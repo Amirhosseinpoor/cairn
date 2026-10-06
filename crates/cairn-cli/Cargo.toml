@@ -20,6 +20,7 @@ cairn-perm.workspace = true
 cairn-sandbox.workspace = true
 cairn-search.workspace = true
 cairn-context.workspace = true
+cairn-index.workspace = true
 cairn-git.workspace = true
 cairn-tools.workspace = true
 cairn-session.workspace = true

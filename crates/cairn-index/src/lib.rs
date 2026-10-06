@@ -1,5 +1,15 @@
-//! `cairn-index` — Workspace .cairn index: cache, SQLite path index, embeddings (SPEC 5.4)
-//!
-//! Delivered in milestone **M3** (SPEC §15.4). This crate is a compile-checked
-//! placeholder so workspace dependency direction (REQ-ARCH-003) is enforced from
-//! day one; the module boundary and public API land with the milestone.
+//! `cairn-index` — the workspace symbol index and repository map (SPEC §5.2,
+//! §5.3).
+
+pub mod extract;
+pub mod rank;
+pub mod resolve;
+pub mod store;
+
+pub use extract::{extract, Extracted, Language, Symbol};
+pub use rank::Params;
+pub use store::{
+    cache_path, Index, IndexError, Query, Ranked, ScanOptions, ScanReport, Stats, SymbolRow,
+    MAX_FILE_BYTES, TOP_K,
+};
+pub mod watch;
