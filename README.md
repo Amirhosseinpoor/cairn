@@ -86,13 +86,16 @@ Planned per SPEC §15.6: `docs/contributor-guide.md` (M3), `docs/security.md` (M
 
 ## Status
 
-Development follows the milestones in SPEC §15.4. Cairn is currently at **M0 — Skeleton &
-contracts**: the workspace, config loader (layering, validation, JSON Schema), CLI command tree,
-event bus and the stable error-code registry are in place. Providers, tools, sessions, the context
-engine, the TUI and the sandbox land in M1–M5 — see [PROGRESS.md](PROGRESS.md) for the live
-picture. Until their milestone ships, commands such as `cairn run`, `cairn chat`, `cairn resume`,
-`cairn export` and `cairn update` parse and validate their flags, then exit `1` with
-`E-IMPL-STAGE` naming the milestone that delivers them.
+Development follows the milestones in SPEC §15.4. Cairn is at **M1 — Provider + headless loop**:
+five provider adapters with streaming, retries and cassette-tested fault handling; persisted
+sessions; headless `cairn run -p` (text, JSON and stream-JSON; `--session`, `--input`); `cairn
+resume`, `sessions`, `export`, `migrate`; `cairn init`; `cairn auth login/logout`; `cairn update
+--check`; and structured logging.
+
+Not built yet, each naming its milestone when invoked: `cairn chat` and bare `cairn` (the TUI,
+M3), tool execution and editing (M2), modes, guardrails and the sandbox (M4), and installing an
+update — which waits for the release signing key (M5), so `cairn update` refuses rather than
+replace the binary unverified. See [PROGRESS.md](PROGRESS.md) for the live picture.
 
 ## License
 

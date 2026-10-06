@@ -8,7 +8,7 @@
 use cairn_core::cancel::CancellationToken;
 use cairn_core::error::{codes, ExitStatus};
 
-use crate::args::{ExportArgs, ResumeArgs, RunArgs, SessionsArgs, UpdateArgs};
+use crate::args::{ExportArgs, ResumeArgs, RunArgs, SessionsArgs};
 use crate::commands::{sessions, Startup};
 use crate::headless::{self, OutputFormat};
 use crate::output::Fail;
@@ -96,6 +96,7 @@ pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<
         input,
         auto_recover: startup.loaded.config.session.auto_recover,
         quiet: startup.quiet,
+        cache_home: startup.loaded.paths.cache_home.clone(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -232,6 +233,7 @@ pub fn resume(cli: &crate::args::Cli, args: &ResumeArgs, startup: &Startup) -> R
             input: Vec::new(),
             auto_recover: false,
             quiet: startup.quiet,
+            cache_home: startup.loaded.paths.cache_home.clone(),
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -623,14 +625,6 @@ fn write_fail(path: &std::path::Path, e: &std::io::Error) -> Fail {
     Fail::new(code, status, format!("{}: {e}", path.display()), Some(hint))
 }
 
-/// `cairn update [--check]` — release plumbing is M5.
-pub fn update(_args: &UpdateArgs) -> Result<i32, Fail> {
-    Err(Fail::not_implemented(
-        "`cairn update` (signed releases)",
-        "M5",
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,16 +702,6 @@ mod tests {
         let startup = startup_in(tmp.path());
         let cli = crate::args::Cli::parse_from(["cairn"]);
         assert!(chat(&cli, &startup).unwrap_err().message.contains("M3"));
-        // `run` landed in M1, so it is gone from the stub roll-call — what
-        // remains is proof the other two still name theirs.
-        assert!(update(&UpdateArgs {
-            check: false,
-            version: None,
-            yes: false
-        })
-        .unwrap_err()
-        .message
-        .contains("M5"));
     }
 
     #[test]

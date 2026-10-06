@@ -13,6 +13,7 @@ pub mod init;
 pub mod mcp;
 pub mod run;
 pub mod sessions;
+pub mod update;
 pub mod version;
 
 use crate::args::{Cli, Command, ConfigCmd};
@@ -92,7 +93,7 @@ pub fn dispatch(cli: &Cli) -> Result<i32, Fail> {
         Some(Command::Config(cmd)) => config::run(cmd, &startup),
         Some(Command::Auth(cmd)) => auth::run(cmd, &startup),
         Some(Command::Mcp(cmd)) => mcp::run(cmd, &startup),
-        Some(Command::Update(args)) => run::update(args),
+        Some(Command::Update(args)) => update::run(cli, args, &startup),
         Some(Command::Export(args)) => run::export(cli, args, &startup),
         Some(Command::Init(args)) => init::run(args, &startup),
         // `Migrate` is handled above, before the startup checks.

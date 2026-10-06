@@ -1191,9 +1191,8 @@ fn mcp_add_and_remove_roundtrip() {
 #[test]
 fn stubs_name_their_milestone() {
     let fx = Fixture::new();
-    let cases: [(&[&str], &str); 4] = [
+    let cases: [(&[&str], &str); 3] = [
         (&["chat"], "M3"),
-        (&["update"], "M5"),
         (&["mcp", "inspect", "x"], "M4"),
         (&["mcp", "refresh"], "M4"),
     ];
@@ -1211,12 +1210,7 @@ fn stubs_name_their_milestone() {
 fn no_bare_unimplemented_paths() {
     let fx = Fixture::new();
     // A panic would exit 101 with a Rust backtrace instead of a stable code.
-    for args in [
-        vec!["chat"],
-        vec!["update"],
-        vec!["migrate"],
-        vec!["export", "ses_x"],
-    ] {
+    for args in [vec!["chat"], vec!["migrate"], vec!["export", "ses_x"]] {
         let out = fx.cairn().args(&args).output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!stderr.contains("panicked"), "{args:?} panicked: {stderr}");
@@ -2004,6 +1998,158 @@ fn init_global_writes_only_the_user_file() {
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(fx.home.join("config").join("AGENTS.md").exists());
     assert!(!fx.ws.join("AGENTS.md").exists());
+}
+
+/// A loopback release server answering every request with `body`.
+fn serve_manifest(body: &str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback");
+    let address = listener.local_addr().expect("addr");
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    std::thread::spawn(move || {
+        while let Ok((mut socket, _)) = listener.accept() {
+            let mut head = [0u8; 4096];
+            let _ = socket.read(&mut head);
+            let _ = socket.write_all(response.as_bytes());
+        }
+    });
+    format!("http://{address}/stable.json")
+}
+
+fn manifest_for_this_host(version: &str) -> String {
+    format!(
+        r#"{{"version":"{version}","released_at":"2030-01-01T00:00:00Z","assets":[
+            {{"target":"{arch}-unknown-{os}","url":"https://example.invalid/cairn","sha256":"abc123","minisig":"sig"}}]}}"#,
+        arch = std::env::consts::ARCH,
+        os = std::env::consts::OS,
+    )
+}
+
+fn update(fx: &Fixture, url: &str, args: &[&str]) -> std::process::Output {
+    fx.cairn()
+        .env("CAIRN_UPDATE_URL", url)
+        .arg("update")
+        .args(args)
+        .output()
+        .expect("runs")
+}
+
+/// REQ-OPS-007: `--check` prints `up to date` or `X available (sha256 …)` and
+/// exits 0 in both cases.
+#[test]
+fn update_check_reports_availability_and_exits_zero() {
+    let fx = Fixture::new();
+    let newer = serve_manifest(&manifest_for_this_host("99.0.0"));
+    let out = update(&fx, &newer, &["--check"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "99.0.0 available (sha256 abc123)"
+    );
+
+    let same = serve_manifest(&manifest_for_this_host(env!("CARGO_PKG_VERSION")));
+    let out = update(&fx, &same, &["--check"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "up to date");
+}
+
+/// Installing is refused until a release key exists: `E-UPDATE-SIGNATURE`,
+/// and the binary is untouched (§1.5 — never replace without verifying).
+#[test]
+fn update_refuses_to_install_without_a_release_key() {
+    let fx = Fixture::new();
+    let url = serve_manifest(&manifest_for_this_host("99.0.0"));
+    let out = update(&fx, &url, &["--yes"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("E-UPDATE-SIGNATURE"), "{stderr}");
+    assert!(stderr.contains("cairn-release.pub"), "{stderr}");
+
+    // Asking for a version the channel does not carry is its own error.
+    let out = update(&fx, &url, &["--version", "98.0.0"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not published"));
+}
+
+/// T-OPS-002 / T-CLI-016: while a turn is in flight an install is refused
+/// with exit 10 — and a stale marker (its process gone) does not count.
+#[test]
+fn t_cli_016_update_during_a_turn_is_exit_10() {
+    let fx = Fixture::new();
+    let url = serve_manifest(&manifest_for_this_host("99.0.0"));
+    let cache = fx.home.join("cache");
+    let markers = cache.join("active-turns");
+    std::fs::create_dir_all(&markers).expect("markers");
+
+    // A marker for a process that is certainly gone: ignored and removed.
+    let ghost = markers.join((u32::MAX - 7).to_string());
+    std::fs::write(&ghost, "").expect("ghost");
+    let out = update(&fx, &url, &["--yes"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stale marker must not block: {out:?}"
+    );
+    assert!(!ghost.exists(), "the stale marker is cleaned up");
+
+    // A marker for a live process (this test's own): refused with exit 10.
+    std::fs::write(markers.join(std::process::id().to_string()), "").expect("live");
+    let out = update(&fx, &url, &["--yes"]);
+    assert_eq!(out.status.code(), Some(10), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cannot update: a turn is in progress"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("ERR_BUSY"), "{stderr}");
+
+    // `--check` changes nothing, so it is allowed mid-turn.
+    let out = update(&fx, &url, &["--check"]);
+    assert_eq!(out.status.code(), Some(0));
+}
+
+/// A real run holds the marker while it works and removes it after.
+#[test]
+fn a_run_leaves_no_marker_behind() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    let (out, _) = run_json(&fx, &["-p", "hi"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let markers = fx.home.join("cache").join("active-turns");
+    let left = std::fs::read_dir(&markers).map_or(0, Iterator::count);
+    assert_eq!(left, 0, "the marker is removed when the turn ends");
+}
+
+#[test]
+fn update_failures_name_the_problem() {
+    let fx = Fixture::new();
+    // Not https and not loopback.
+    let out = update(&fx, "http://example.invalid/stable.json", &["--check"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not https"));
+    // A server that is not there.
+    let out = update(&fx, "http://127.0.0.1:1/stable.json", &["--check"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot reach"));
+    // A manifest that is not one.
+    let junk = serve_manifest("not json");
+    let out = update(&fx, &junk, &["--check"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not valid"));
+    // Offline is refused before any request.
+    let out = fx
+        .cairn()
+        .env("CAIRN_UPDATE_URL", &junk)
+        .args(["--offline", "update", "--check"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("offline"));
 }
 
 /// T-CLI-010's failure third: a 401 is exit 3 with the stable code and the

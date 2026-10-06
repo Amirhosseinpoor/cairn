@@ -21,7 +21,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **471 passed, 0 failed** |
+| Tests | `cargo test --workspace` | **485 passed, 0 failed** |
 | MSRV | `cargo +1.83.0 test --workspace` | 392 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
@@ -117,11 +117,11 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 
 ### Interim behavior (removed as milestones land)
 
-`cairn run`, `cairn chat`, `cairn init`, `cairn resume <id>` and `cairn update` parse and validate
-their flags, then exit `1` with `E-IMPL-STAGE` naming the milestone that delivers them. This code is
-removed in the milestone that implements the command; it exists so the CLI surface is complete and
-testable — including the command `cairn doctor` points people at.
-(`cairn export` and `cairn migrate` were the last of these and are now real.)
+`cairn chat` (and bare `cairn`) parse and validate their flags, then exit `1` with `E-IMPL-STAGE`
+naming M3, which delivers the TUI. `cairn mcp inspect` / `refresh` name M4. Everything else in the
+command tree is real as of M1: `run`, `resume`, `init`, `export`, `migrate`, `sessions`, `auth
+login/logout`, and `update --check` (installing an update refuses with `E-UPDATE-SIGNATURE` until a
+release signing key exists — M5).
 
 ## M1 progress
 
@@ -166,6 +166,7 @@ testable — including the command `cairn doctor` points people at.
 | `cairn resume <id>` — loads and reports the restored state; an interrupted turn is settled by `session.auto_recover` (`r`: re-issue the call once), an interactive r/d/k prompt, or `k` with no terminal; the interactive *chat* continuation stays with the TUI (M3) | done (M1) | T-SESS-013, T-SESS-021, T-SESS-022 |
 | `cairn auth login` / `logout` — a key is read from `--key-stdin` or a no-echo prompt, validated as one clean token, and stored as `providers.<id>.api_key` in the user config at `0600` (§4.10 step 4); logout removes it and says if an environment key remains. The OS keychain (step 3) needs a per-platform backend and stays unbuilt | done (M1, keychain deferred) | REQ-PROV-015, REQ-PROV-017, REQ-PROV-018, §4.10 |
 | `cairn init [--global]` — scaffolds `AGENTS.md` (build/test commands detected from the manifests present), `.cairnignore`, `.cairn/config.toml` and the `.gitignore` lines REQ-SAFE-003 / §7.3 / §4.10 ask for; never overwrites, only appends missing `.gitignore` lines, honours `plans.shareable` / `security.share_permissions`, accepts `CAIRN.md` as the alias, skips `.gitignore` outside a git repository; a second run changes nothing | done (M1; §10.3's `/init` shares it in M3) | T-SEC-014, REQ-SAFE-003, §7.3, §5.7 |
+| `cairn update` — `--check` reads the release manifest (`CAIRN_UPDATE_URL`, https or loopback only), orders versions, picks this platform's asset and prints REQ-OPS-007's two sentences; an install while any turn runs is exit 10 `cannot update: a turn is in progress` (per-process `active-turns/<pid>` markers, stale ones pruned); installing itself refuses with `E-UPDATE-SIGNATURE` because §1.5/REQ-OPS-006 require a bundled `cairn-release.pub` that does not exist yet | `--check` and the busy guard done (M1); install deferred to M5 | T-CLI-016, T-OPS-002, REQ-OPS-007 |
 
 ### Decisions taken while landing the session store
 

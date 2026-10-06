@@ -50,6 +50,8 @@ pub struct Plan {
     /// (rebuild) rather than `k` (keep).
     pub auto_recover: bool,
     pub quiet: bool,
+    /// Where the in-flight-turn marker goes (`cairn update` reads it).
+    pub cache_home: PathBuf,
 }
 
 /// `--input-fmt`: `text` is one user context message; `json`/`jsonl` is one
@@ -207,6 +209,7 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         watcher.cancel();
     });
 
+    let _turn = crate::activity::begin(&plan.cache_home);
     let (mut writer, state, created) = open_session(&plan)?;
     let session_id = state.header.session_id.clone();
     let turn_id = state.next_turn_id;

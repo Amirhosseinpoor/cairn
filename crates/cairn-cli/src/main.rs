@@ -14,6 +14,7 @@ macro_rules! yell {
     };
 }
 
+mod activity;
 mod args;
 mod commands;
 mod headless;
