@@ -9,6 +9,7 @@
 //! * [`builtin`] — the tools themselves.
 
 pub mod builtin;
+pub mod edit;
 pub mod output;
 pub mod paths;
 pub mod pipeline;
@@ -25,6 +26,7 @@ pub use pipeline::{
 pub use registry::{offered_in, Registry, RegistryError, TableRow, ToolDef};
 pub use tool::Tool;
 pub use types::{
-    Access, EventSink, FileState, Idempotency, NullSink, PathArg, PermissionClass, RequestInfo,
-    SideEffect, ToolContext, ToolError, ToolOutput,
+    Access, EventSink, FileState, Idempotency, LineEndings, NoSyntax, NullSink, PathArg,
+    PermissionClass, RequestInfo, SideEffect, SyntaxCheck, SyntaxProblem, SyntaxVerdict,
+    ToolContext, ToolError, ToolOutput,
 };

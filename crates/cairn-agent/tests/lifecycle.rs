@@ -190,6 +190,8 @@ fn world(mode: Mode) -> World {
         )),
         boundary: Arc::clone(&boundary),
         redactor: Arc::new(Redactor::default()),
+        syntax: None,
+        line_endings: cairn_tools::LineEndings::Lf,
         approval_timeout: std::time::Duration::from_secs(1),
     });
     let env = CallEnv {
@@ -293,7 +295,18 @@ async fn a_tool_call_runs_and_its_result_reaches_the_next_model_call() {
     let reqs = p.requests();
     assert_eq!(reqs.len(), 2);
     let names: Vec<_> = reqs[0].tools.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, ["glob", "grep", "list_dir", "read_file"]);
+    assert_eq!(
+        names,
+        [
+            "edit_file",
+            "glob",
+            "grep",
+            "list_dir",
+            "multi_edit",
+            "read_file",
+            "write_file"
+        ]
+    );
     // The second request carries the assistant's call and the tool's answer.
     let second = &reqs[1].messages;
     assert_eq!(second.len(), 4);

@@ -32,6 +32,7 @@ clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4.5"
 toml_edit = "0.22"
 jsonschema = { version = "0.46", default-features = false }
+similar = "2"
 ignore = "0.4"
 # Pinned: the newest grep-* releases declare `edition = "2024"`, which Cargo 1.83
 # (D-01 MSRV) cannot parse, and they publish no `rust-version` for the resolver

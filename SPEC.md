@@ -2938,6 +2938,7 @@ max_output = 64000                 # int 1..1_000_000
 temperature = 0.2                  # float
 
 models_path = ""                   # path to custom models.json (REQ-PROV-014)
+line_endings = "auto"               # enum: auto|lf|crlf — line endings for NEW files; auto = the platform's own (REQ-TOOL-004)
 
 [shell]
 command = ""                       # path; "" = auto (§6.4.1)

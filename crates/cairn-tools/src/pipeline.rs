@@ -33,7 +33,8 @@ use crate::paths::Boundary;
 use crate::registry::Registry;
 use crate::tool::Tool;
 use crate::types::{
-    Access, EventSink, FileState, PermissionClass, SideEffect, ToolContext, ToolError,
+    Access, EventSink, FileState, LineEndings, NoSyntax, PermissionClass, SideEffect, SyntaxCheck,
+    ToolContext, ToolError,
 };
 
 /// §6.6: parallel-safe tools run up to this many at once.
@@ -153,6 +154,8 @@ pub struct Executor {
     boundary: Arc<Boundary>,
     ignore: Arc<IgnoreEngine>,
     redactor: Arc<Redactor>,
+    syntax: Arc<dyn SyntaxCheck>,
+    line_endings: LineEndings,
     file_state: Arc<FileState>,
     approval_timeout: Duration,
     reads: Semaphore,
@@ -185,6 +188,10 @@ pub struct ExecutorParts {
     pub boundary: Arc<Boundary>,
     pub ignore: Arc<IgnoreEngine>,
     pub redactor: Arc<Redactor>,
+    /// Post-edit validation; `None` means [`NoSyntax`].
+    pub syntax: Option<Arc<dyn SyntaxCheck>>,
+    /// `line_endings` for new files.
+    pub line_endings: LineEndings,
     /// `permissions.ask_timeout_ms` (§8.1; default 10 minutes).
     pub approval_timeout: Duration,
 }
@@ -260,6 +267,8 @@ impl Executor {
             boundary: parts.boundary,
             ignore: parts.ignore,
             redactor: parts.redactor,
+            syntax: parts.syntax.unwrap_or_else(|| Arc::new(NoSyntax)),
+            line_endings: parts.line_endings,
             file_state: Arc::new(FileState::default()),
             approval_timeout: parts.approval_timeout,
             reads: Semaphore::new(MAX_PARALLEL_READS),
@@ -403,6 +412,8 @@ impl Executor {
             boundary: Arc::clone(&self.boundary),
             ignore: Arc::clone(&self.ignore),
             file_state: Arc::clone(&self.file_state),
+            syntax: Arc::clone(&self.syntax),
+            line_endings: self.line_endings,
         };
         let write_target = resolved
             .iter()
@@ -547,10 +558,18 @@ impl Executor {
                     call_id: call.call_id.clone(),
                     tool: call.name.clone(),
                     summary: self.redactor.redact(&summary),
-                    detail: json!({
-                        "paths": resolved.iter().map(|(_, r)| r.display()).collect::<Vec<_>>(),
-                        "mode": env.mode.as_str(),
-                    }),
+                    // §9.7 mitigation 7: what will really be done, in the
+                    // model's own words and bytes — never only a description.
+                    detail: {
+                        let mut input = call.input.clone();
+                        crate::output::scrub(&mut input, &self.redactor);
+                        crate::output::fit(&mut input, 8 * 1024);
+                        json!({
+                            "paths": resolved.iter().map(|(_, r)| r.display()).collect::<Vec<_>>(),
+                            "mode": env.mode.as_str(),
+                            "input": input,
+                        })
+                    },
                     rule_id: rule_id.clone(),
                     reason,
                 };

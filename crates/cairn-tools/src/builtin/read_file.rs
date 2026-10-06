@@ -197,12 +197,13 @@ fn read(input: &Input, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
     })?;
 
     let sha256 = hex::encode(Sha256::digest(&bytes));
-    ctx.file_state.record(path.clone(), sha256.clone());
+    let normalised = text.replace("\r\n", "\n");
+    ctx.file_state
+        .record(path.clone(), sha256.clone(), Some(&normalised));
 
     let crlf_count = text.matches("\r\n").count();
     let lf_count = text.matches('\n').count() - crlf_count;
     let crlf = crlf_count > lf_count;
-    let normalised = text.replace("\r\n", "\n");
     let mut lines: Vec<&str> = normalised.split('\n').collect();
     // A trailing newline ends the last line; it does not start another.
     if lines.last() == Some(&"") {

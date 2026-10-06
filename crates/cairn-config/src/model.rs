@@ -38,6 +38,9 @@ pub struct Config {
     pub models: BTreeMap<String, ModelOverride>,
     /// Path to a custom `models.json` ("" = bundled registry).
     pub models_path: String,
+    /// Line endings for *new* files (REQ-TOOL-004): `auto` is the platform's
+    /// own; existing files keep theirs.
+    pub line_endings: LineEndingsSetting,
     pub shell: ShellConfig,
     pub discovery: DiscoveryConfig,
     pub repo_map: RepoMapConfig,
@@ -95,6 +98,7 @@ impl Default for Config {
             providers,
             models: BTreeMap::new(),
             models_path: String::new(),
+            line_endings: LineEndingsSetting::Auto,
             shell: ShellConfig::default(),
             discovery: DiscoveryConfig::default(),
             repo_map: RepoMapConfig::default(),
@@ -186,6 +190,15 @@ pub enum SubmitKey {
 pub enum EditorMode {
     Emacs,
     Vi,
+}
+
+/// `line_endings` (REQ-TOOL-004).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LineEndingsSetting {
+    Auto,
+    Lf,
+    Crlf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

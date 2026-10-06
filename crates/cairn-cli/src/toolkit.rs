@@ -132,6 +132,12 @@ pub fn build(wiring: &Wiring<'_>) -> Result<Arc<Executor>, Fail> {
         boundary,
         ignore,
         redactor: Arc::new(crate::log::redactor_always(config)),
+        syntax: None,
+        line_endings: match config.line_endings {
+            cairn_config::LineEndingsSetting::Auto => cairn_tools::LineEndings::Auto,
+            cairn_config::LineEndingsSetting::Lf => cairn_tools::LineEndings::Lf,
+            cairn_config::LineEndingsSetting::Crlf => cairn_tools::LineEndings::Crlf,
+        },
         approval_timeout: Duration::from_millis(config.permissions.ask_timeout_ms),
     })))
 }

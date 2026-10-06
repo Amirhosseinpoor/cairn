@@ -96,6 +96,7 @@ pub struct Options {
     pub extra_tools: Vec<Arc<dyn Tool>>,
     pub builtin: bool,
     pub approval_timeout: Duration,
+    pub syntax: Option<Arc<dyn cairn_tools::SyntaxCheck>>,
 }
 
 impl Default for Options {
@@ -106,6 +107,7 @@ impl Default for Options {
             extra_tools: Vec::new(),
             builtin: true,
             approval_timeout: Duration::from_secs(600),
+            syntax: None,
         }
     }
 }
@@ -166,6 +168,8 @@ impl Fixture {
             boundary: Arc::clone(&boundary),
             ignore,
             redactor: Arc::new(Redactor::default()),
+            syntax: options.syntax,
+            line_endings: cairn_tools::LineEndings::Lf,
             approval_timeout: options.approval_timeout,
         }));
         let env = CallEnv {

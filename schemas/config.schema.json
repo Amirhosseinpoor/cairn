@@ -107,6 +107,15 @@
       "default": "",
       "type": "string"
     },
+    "line_endings": {
+      "description": "Line endings for *new* files (REQ-TOOL-004): `auto` is the platform's own; existing files keep theirs.",
+      "default": "auto",
+      "allOf": [
+        {
+          "$ref": "#/definitions/LineEndingsSetting"
+        }
+      ]
+    },
     "shell": {
       "default": {
         "command": "",
@@ -639,6 +648,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "LineEndingsSetting": {
+      "description": "`line_endings` (REQ-TOOL-004).",
+      "type": "string",
+      "enum": [
+        "auto",
+        "lf",
+        "crlf"
+      ],
+      "default": "auto"
     },
     "ShellConfig": {
       "type": "object",

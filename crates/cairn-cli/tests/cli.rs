@@ -1389,7 +1389,18 @@ fn run_succeeds_in_all_three_formats() {
             .iter()
             .filter_map(|t| t["function"]["name"].as_str())
             .collect();
-        assert_eq!(offered, ["glob", "grep", "list_dir", "read_file"]);
+        assert_eq!(
+            offered,
+            [
+                "edit_file",
+                "glob",
+                "grep",
+                "list_dir",
+                "multi_edit",
+                "read_file",
+                "write_file"
+            ]
+        );
     }
 }
 
