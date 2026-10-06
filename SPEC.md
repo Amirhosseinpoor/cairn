@@ -1571,7 +1571,7 @@ Applied when exact match fails and `fuzzy != "off"`. Algorithm:
 #### 6.3.6 Post-edit syntax validation & rollback
 1. Determine language from extension + shebang.
 2. If a grammar for the language is bundled: parse the *whole new buffer* with `tree-sitter` (`Parser::parse`, old tree reused).
-3. Failure criterion: the root node has an `ERROR` node, **or** a missing node (`MISSING`) exists, **and** the error range intersects the edited line range ± 10 lines (errors elsewhere in a pre-existing broken file do not block).
+3. Failure criterion: the root node has an `ERROR` node, **or** a missing node (`MISSING`) exists, **and** it is attributable to the edit: if the buffer parsed without errors before the edit, any error afterwards blocks, wherever it is reported (an unclosed brace can surface far from the line that opened it); if the file was already broken, only an error that *starts* within the edited line range ± 10 lines blocks (a tree-sitter `ERROR` node can run to the end of the file, so its start, not its extent, is compared).
 4. On failure: do NOT write; restore buffer; return `E-EDIT-SYNTAX` with `error:{line, column, expected, found, snippet(≤8 lines)}` and recovery: `Fix the syntax issue shown; the file was left unchanged.`
 5. If no grammar: `syntax_ok: null`, no validation (still write).
 6. For `bash`/config languages (`.toml`, `.yaml`, `.json`), run a full-document parse (JSON/YAML/TOML validators) — failure always blocks, regardless of edit range.

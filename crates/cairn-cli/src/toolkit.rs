@@ -132,7 +132,7 @@ pub fn build(wiring: &Wiring<'_>) -> Result<Arc<Executor>, Fail> {
         boundary,
         ignore,
         redactor: Arc::new(crate::log::redactor_always(config)),
-        syntax: None,
+        syntax: Some(Arc::new(cairn_tools::ParseCheck)),
         line_endings: match config.line_endings {
             cairn_config::LineEndingsSetting::Auto => cairn_tools::LineEndings::Auto,
             cairn_config::LineEndingsSetting::Lf => cairn_tools::LineEndings::Lf,

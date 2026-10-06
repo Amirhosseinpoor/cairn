@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 cairn-core.workspace = true
+cairn-parse.workspace = true
 cairn-perm.workspace = true
 cairn-sandbox.workspace = true
 cairn-search.workspace = true

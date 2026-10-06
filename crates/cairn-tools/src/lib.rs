@@ -15,6 +15,7 @@ pub mod paths;
 pub mod pipeline;
 pub mod registry;
 pub mod schema;
+pub mod syntax;
 pub mod tool;
 pub mod types;
 
@@ -24,6 +25,7 @@ pub use pipeline::{
     ToolResult,
 };
 pub use registry::{offered_in, Registry, RegistryError, TableRow, ToolDef};
+pub use syntax::ParseCheck;
 pub use tool::Tool;
 pub use types::{
     Access, EventSink, FileState, Idempotency, LineEndings, NoSyntax, NullSink, PathArg,

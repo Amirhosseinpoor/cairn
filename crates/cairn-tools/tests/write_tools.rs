@@ -835,3 +835,129 @@ async fn t_tool_001_write_tool_metadata_matches_the_table() {
         assert_eq!(r.max_output_bytes, kib * 1024, "{name}");
     }
 }
+
+// -------------------------------------------- the real validators (§6.3.6)
+
+fn parsing() -> Fixture {
+    with_syntax(Some(Arc::new(cairn_tools::ParseCheck)))
+}
+
+/// T-EDIT-021 with tree-sitter: an edit that breaks Rust is refused and the
+/// file's hash is unchanged.
+#[tokio::test]
+async fn t_edit_021_a_real_rust_syntax_error_is_rolled_back() {
+    let fx = parsing();
+    let original = "fn a() -> u32 {\n    1\n}\n\nfn b() {}\n";
+    fx.write("lib.rs", original);
+    let r = fx
+        .call(
+            "edit_file",
+            json!({"path": "lib.rs", "old_string": "    1\n}", "new_string": "    1 +\n}"}),
+        )
+        .await;
+    assert_eq!(code(&r), "E-EDIT-SYNTAX");
+    assert_model_visible(&r);
+    assert!(r.envelope["data"]["line"].as_u64().expect("line") >= 1);
+    assert!(r.envelope["data"]["snippet"]
+        .as_str()
+        .expect("snippet")
+        .contains('|'));
+    assert_eq!(
+        sha(&disk(&fx, "lib.rs")),
+        sha(original.as_bytes()),
+        "byte-identical (REQ-TOOL-014)"
+    );
+
+    // A good edit is accepted and says it was checked.
+    let ok = fx
+        .call(
+            "edit_file",
+            json!({"path": "lib.rs", "old_string": "    1\n}", "new_string": "    2\n}"}),
+        )
+        .await;
+    assert_eq!(data(&ok)["syntax_ok"], true);
+}
+
+/// T-EDIT-022: breaking `package.json`, with the validator's position.
+#[tokio::test]
+async fn t_edit_022_breaking_json_is_blocked_with_the_validators_position() {
+    let fx = parsing();
+    let original = "{\n  \"name\": \"app\",\n  \"version\": \"1.0.0\"\n}\n";
+    fx.write("package.json", original);
+    let r = fx
+        .call(
+            "edit_file",
+            json!({"path": "package.json", "old_string": "\"1.0.0\"", "new_string": ""}),
+        )
+        .await;
+    assert_eq!(code(&r), "E-EDIT-SYNTAX");
+    assert!(
+        r.envelope["data"]["line"].as_u64().expect("line") >= 3,
+        "{}",
+        r.envelope
+    );
+    assert_eq!(disk(&fx, "package.json"), original.as_bytes());
+    // The same edit done properly passes.
+    let fine = fx
+        .call(
+            "edit_file",
+            json!({"path": "package.json", "old_string": "\"1.0.0\"", "new_string": "\"2.0.0\""}),
+        )
+        .await;
+    assert_eq!(data(&fine)["syntax_ok"], true);
+}
+
+/// T-EDIT-023: the file was already broken far from the edit.
+#[tokio::test]
+async fn t_edit_023_a_pre_existing_error_far_from_the_edit_does_not_block_it() {
+    let fx = parsing();
+    let mut text = String::from("fn broken( {\n");
+    for i in 0..60 {
+        text.push_str("// filler ");
+        text.push_str(&i.to_string());
+        text.push('\n');
+    }
+    text.push_str("fn fine() { one(); }\n");
+    fx.write("old.rs", &text);
+    let r = fx
+        .call(
+            "edit_file",
+            json!({"path": "old.rs", "old_string": "one()", "new_string": "two()"}),
+        )
+        .await;
+    assert!(r.ok, "{}", r.envelope);
+    assert!(std::fs::read_to_string(fx.path("old.rs"))
+        .expect("file")
+        .contains("two()"));
+}
+
+#[tokio::test]
+async fn multi_edit_and_other_languages_are_validated_too() {
+    let fx = parsing();
+    fx.write("a.py", "def f():\n    return 1\n");
+    let r = fx
+        .call(
+            "edit_file",
+            json!({"path": "a.py", "old_string": "return 1", "new_string": "return ("}),
+        )
+        .await;
+    assert_eq!(code(&r), "E-EDIT-SYNTAX");
+    fx.write("c.toml", "[a]\nb = 1\n");
+    let r = fx
+        .call(
+            "multi_edit",
+            json!({"path": "c.toml", "edits": [{"old_string": "b = 1", "new_string": "b = "}]}),
+        )
+        .await;
+    assert_eq!(code(&r), "E-EDIT-SYNTAX");
+    assert_eq!(disk(&fx, "c.toml"), b"[a]\nb = 1\n");
+    // A file type with no validator is written, unchecked.
+    fx.write("notes.txt", "hello {\n");
+    let r = fx
+        .call(
+            "edit_file",
+            json!({"path": "notes.txt", "old_string": "hello", "new_string": "goodbye ("}),
+        )
+        .await;
+    assert_eq!(data(&r)["syntax_ok"], Value::Null);
+}
