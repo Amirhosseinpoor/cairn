@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "entries": {
+      "type": "array"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "entry_count": {
+      "type": "integer"
+    }
+  },
+  "title": "list_dir output",
+  "description": "The `data` object of a successful result."
+}

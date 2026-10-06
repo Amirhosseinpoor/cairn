@@ -193,6 +193,7 @@ fn world(mode: Mode) -> World {
         syntax: None,
         line_endings: cairn_tools::LineEndings::Lf,
         observer: None,
+        questioner: None,
         approval_timeout: std::time::Duration::from_secs(1),
     });
     let env = CallEnv {
@@ -299,9 +300,13 @@ async fn a_tool_call_runs_and_its_result_reaches_the_next_model_call() {
     assert_eq!(
         names,
         [
+            "ask_user",
             "bash",
             "bash_background",
             "edit_file",
+            "git_commit",
+            "git_diff",
+            "git_status",
             "glob",
             "grep",
             "job_kill",
@@ -309,6 +314,8 @@ async fn a_tool_call_runs_and_its_result_reaches_the_next_model_call() {
             "list_dir",
             "multi_edit",
             "read_file",
+            "todo_write",
+            "web_fetch",
             "write_file",
         ]
     );

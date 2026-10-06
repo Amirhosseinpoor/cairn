@@ -15,7 +15,7 @@ use cairn_sandbox::PathChecksOnly;
 use cairn_search::{default_global_ignore, IgnoreEngine, IgnoreOptions};
 use cairn_tools::{
     builtin, Answer, ApprovalRequest, Approver, Boundary, DenyAll, EventSink, Executor,
-    ExecutorParts, Registry,
+    ExecutorParts, Question, Questioner, Registry, Reply,
 };
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -111,7 +111,12 @@ pub fn build(wiring: &Wiring<'_>) -> Result<Arc<Executor>, Fail> {
     }
 
     let mut registry = Registry::new();
-    builtin::register_all(&mut registry).map_err(|e| {
+    let web = builtin::web::WebFetch::new(builtin::web::Policy {
+        allow_hosts: config.network.allow_hosts.clone(),
+        offline: config.network.offline,
+        allow_loopback: false,
+    });
+    builtin::register_with(&mut registry, web).map_err(|e| {
         Fail::new(
             codes::LOOP_INVARIANT,
             ExitStatus::Generic,
@@ -136,6 +141,11 @@ pub fn build(wiring: &Wiring<'_>) -> Result<Arc<Executor>, Fail> {
         redactor: Arc::new(crate::log::redactor_always(config)),
         syntax: Some(Arc::new(cairn_tools::ParseCheck)),
         observer: wiring.observer.clone(),
+        questioner: if wiring.allow_ask {
+            Some(Arc::new(StdinQuestioner) as Arc<dyn Questioner>)
+        } else {
+            None
+        },
         line_endings: match config.line_endings {
             cairn_config::LineEndingsSetting::Auto => cairn_tools::LineEndings::Auto,
             cairn_config::LineEndingsSetting::Lf => cairn_tools::LineEndings::Lf,
@@ -204,9 +214,81 @@ impl Approver for StdinApprover {
     }
 }
 
+/// `--allow-ask`: `ask_user` questions go to stderr as one JSON line and the
+/// answer comes back on stdin as `{"answer": "...", "selected_option": 2}`.
+/// End of input is "nobody there", never an invented answer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StdinQuestioner;
+
+/// What a stdin answer line means for a question with `options` options.
+#[must_use]
+pub fn parse_reply(line: &str, options: usize) -> Option<Reply> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let selected = value
+        .get("selected_option")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| (1..=options).contains(n));
+    let answer = value
+        .get("answer")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    match (answer, selected) {
+        (Some(answer), selected) => Some(Reply {
+            answer,
+            selected_option: selected,
+        }),
+        (None, Some(n)) => Some(Reply {
+            answer: String::new(),
+            selected_option: Some(n),
+        }),
+        (None, None) => None,
+    }
+}
+
+impl Questioner for StdinQuestioner {
+    fn ask(&self, question: Question) -> BoxFuture<'_, Option<Reply>> {
+        async move {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "type": "question.request",
+                    "question": question.text,
+                    "options": question.options,
+                    "allow_free_text": question.allow_free_text,
+                })
+            );
+            let count = question.options.len();
+            tokio::task::spawn_blocking(move || {
+                let mut line = String::new();
+                match std::io::stdin().lock().read_line(&mut line) {
+                    Ok(n) if n > 0 => parse_reply(line.trim(), count),
+                    _ => None,
+                }
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+        .boxed()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replies_parse_and_a_bad_line_is_no_answer() {
+        let r = parse_reply(r#"{"answer":"blue"}"#, 0).expect("reply");
+        assert_eq!((r.answer.as_str(), r.selected_option), ("blue", None));
+        let r = parse_reply(r#"{"selected_option":2}"#, 3).expect("reply");
+        assert_eq!(r.selected_option, Some(2));
+        // An option that does not exist is ignored; with no text either, no answer.
+        assert!(parse_reply(r#"{"selected_option":9}"#, 3).is_none());
+        assert!(parse_reply("not json", 3).is_none());
+        assert!(parse_reply("{}", 3).is_none());
+    }
 
     #[test]
     fn answers_parse_and_everything_unclear_is_a_refusal() {

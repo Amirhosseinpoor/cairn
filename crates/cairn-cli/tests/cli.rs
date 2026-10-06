@@ -1393,9 +1393,13 @@ fn run_succeeds_in_all_three_formats() {
         assert_eq!(
             offered,
             [
+                "ask_user",
                 "bash",
                 "bash_background",
                 "edit_file",
+                "git_commit",
+                "git_diff",
+                "git_status",
                 "glob",
                 "grep",
                 "job_kill",
@@ -1403,6 +1407,8 @@ fn run_succeeds_in_all_three_formats() {
                 "list_dir",
                 "multi_edit",
                 "read_file",
+                "todo_write",
+                "web_fetch",
                 "write_file",
             ]
         );
@@ -2925,4 +2931,46 @@ fn t_chk_040_a_writing_turn_leaves_an_undoable_checkpoint() {
         std::fs::read_to_string(fx.ws.join("notes.txt")).expect("read"),
         "original\n"
     );
+}
+
+/// T-TOOL-001 (CLI half): `doctor --tools` prints §6.1's table from live
+/// registration.
+#[test]
+fn t_tool_001_doctor_tools_lists_the_registered_tools() {
+    let fx = Fixture::new();
+    let row = doctor_row(&fx, &["--tools"], 23);
+    assert_eq!(row["status"], "pass", "{row}");
+    let detail = row["detail"].as_str().expect("detail");
+    assert!(detail.starts_with("17 tools registered"), "{detail}");
+    for name in [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "multi_edit",
+        "list_dir",
+        "glob",
+        "grep",
+        "bash",
+        "bash_background",
+        "job_output",
+        "job_kill",
+        "git_status",
+        "git_diff",
+        "git_commit",
+        "web_fetch",
+        "todo_write",
+        "ask_user",
+    ] {
+        assert!(detail.contains(name), "{name} missing from:\n{detail}");
+    }
+    assert!(
+        detail.contains("bash_background") && detail.contains("none"),
+        "{detail}"
+    );
+    // Without the flag the row only counts.
+    let row = doctor_row(&fx, &[], 23);
+    assert!(row["detail"]
+        .as_str()
+        .expect("detail")
+        .contains("--tools lists them"));
 }

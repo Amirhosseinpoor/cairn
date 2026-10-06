@@ -426,9 +426,8 @@ fn t_arch_006_no_blocking_sends() {
 // ------------------------------------------------------------------ T-SCHEMA
 
 /// T-SCHEMA-001 — the tool JSON Schemas are draft 2020-12 with titles, and
-/// `schemas/` keeps the layout §15.1 fixes (REQ-ARCH-009). The content check
-/// activates with M4 (`cairn-tools`); until then this pins the contract and the
-/// M0 half of the directory (config + events), so a missing deliverable fails.
+/// `schemas/` keeps the layout §15.1 fixes (REQ-ARCH-009). The tool schemas
+/// are generated from the live registry (`scripts/check-schemas.sh`).
 #[test]
 fn t_schema_001_tool_schemas() {
     let schemas = root().join("schemas");

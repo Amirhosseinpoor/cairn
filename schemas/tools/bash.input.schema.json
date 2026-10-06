@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "command"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 600000,
+      "default": 120000
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "background": {
+      "type": "boolean",
+      "default": false
+    },
+    "input": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "tty": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null
+    }
+  },
+  "title": "bash input",
+  "description": "Run a shell command in the workspace and return its stdout, stderr and exit code. Commands run without a terminal and with a minimal environment. Output beyond about 56 KiB is dropped, not fatal. A command that runs past `timeout_ms` (default 2 minutes, at most 10) is stopped with its whole process group and what it printed so far is kept. Prefer the file tools to read, search and edit; use this for builds, tests and other programs. For anything long-running use `background: true` and read it with `job_output`."
+}

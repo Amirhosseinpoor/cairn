@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string",
+      "default": "."
+    },
+    "depth": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4,
+      "default": 1
+    },
+    "include_hidden": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "title": "list_dir input",
+  "description": "List the entries of a directory (default: the workspace root), optionally several levels deep. Each entry says whether it is a file, directory or symlink, its size, whether it is binary or excluded by ignore rules, and its language."
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string",
+      "default": "."
+    },
+    "scope": {
+      "enum": [
+        "working",
+        "staged",
+        "all",
+        "commit"
+      ],
+      "default": "all"
+    },
+    "commit": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "unified_lines": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 20,
+      "default": 3
+    },
+    "max_bytes": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 1048576,
+      "default": 131072
+    }
+  },
+  "title": "git_diff input",
+  "description": "Show a unified diff: `working` (unstaged), `staged`, `all` (everything since HEAD, the default) or `commit` (what one commit changed; pass `commit`). Untracked files are included in `working` and `all`."
+}

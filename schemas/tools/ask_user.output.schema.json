@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "answer": {
+      "type": "string"
+    },
+    "selected_option": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "source": {
+      "type": "string"
+    }
+  },
+  "title": "ask_user output",
+  "description": "The `data` object of a successful result."
+}

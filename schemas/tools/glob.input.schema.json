@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "pattern"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "pattern": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "path": {
+      "type": "string",
+      "default": "."
+    },
+    "max_results": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5000,
+      "default": 500
+    },
+    "respect_ignore": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "title": "glob input",
+  "description": "Find files by glob pattern (`**`, `*`, `?`, `{a,b}`, `[abc]`), relative to `path`. Results are workspace-relative, oldest first. Ignored files are excluded unless `respect_ignore` is false."
+}

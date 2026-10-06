@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "path",
+    "content"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string",
+      "maxLength": 400000
+    },
+    "create_dirs": {
+      "type": "boolean",
+      "default": true
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "description": "If set, the file must currently hash to this or the write fails with E-FS-STALE"
+    }
+  },
+  "title": "write_file input",
+  "description": "Create a file, or replace one entirely, with the given content. Prefer edit_file for changes to an existing file. An existing file's line endings and BOM are preserved. Pass expected_sha256 (from read_file) to refuse the write if the file has changed."
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "question"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "options": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "default": []
+    },
+    "allow_free_text": {
+      "type": "boolean",
+      "default": true
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 3600000,
+      "default": 3600000
+    }
+  },
+  "title": "ask_user input",
+  "description": "Ask the person a question and wait for the answer. Use it when a decision is genuinely theirs (a choice between approaches, a missing requirement), not for things you can find out yourself. Offer `options` when the answers are a short list."
+}

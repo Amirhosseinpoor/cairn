@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "bytes_written": {
+      "type": "integer"
+    },
+    "sha256": {
+      "type": "string"
+    },
+    "created": {
+      "type": "boolean"
+    },
+    "lines_added": {
+      "type": "integer"
+    },
+    "lines_removed": {
+      "type": "integer"
+    }
+  },
+  "title": "write_file output",
+  "description": "The `data` object of a successful result."
+}

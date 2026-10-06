@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "command"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "label": {
+      "type": "string",
+      "maxLength": 80
+    }
+  },
+  "title": "bash_background input",
+  "description": "Start a shell command that keeps running after this call returns (a dev server, a watcher, a long build) and get back a job id. Read its output with `job_output` and stop it with `job_kill`. At most 8 jobs run at once."
+}

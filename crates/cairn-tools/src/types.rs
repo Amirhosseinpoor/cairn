@@ -113,6 +113,49 @@ pub struct RequestInfo {
     pub url: Option<String>,
 }
 
+/// What has happened this run that makes later actions riskier.
+#[derive(Debug, Default)]
+pub struct Taint {
+    /// One more than the turn in which a secret was last read; 0 = never.
+    secrets: std::sync::atomic::AtomicU64,
+}
+
+impl Taint {
+    /// A secret store was read during `turn`.
+    pub fn secrets_read(&self, turn: u64) {
+        self.secrets
+            .store(turn.saturating_add(1), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether a secret store was read during `turn`.
+    #[must_use]
+    pub fn secrets_read_in(&self, turn: u64) -> bool {
+        self.secrets.load(std::sync::atomic::Ordering::Relaxed) == turn.saturating_add(1)
+    }
+}
+
+/// A question for the person at the keyboard (`ask_user`, §6.2.17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    pub text: String,
+    pub options: Vec<String>,
+    pub allow_free_text: bool,
+}
+
+/// What they answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    pub answer: String,
+    /// 1-based index into the options, when one was chosen.
+    pub selected_option: Option<usize>,
+}
+
+/// Whoever can answer a [`Question`]: the TUI, or stdin in headless runs.
+pub trait Questioner: Send + Sync {
+    /// `None` when the question could not be put (no terminal, end of input).
+    fn ask(&self, question: Question) -> futures::future::BoxFuture<'_, Option<Reply>>;
+}
+
 /// A shell command line the pipeline must analyse before the tool runs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellRequest {
@@ -366,6 +409,9 @@ pub struct ToolContext {
     pub observer: Arc<dyn cairn_git::WriteObserver>,
     /// Background jobs this process started.
     pub jobs: Arc<crate::shell::jobs::JobTable>,
+    /// Who can answer `ask_user`; `None` in runs with nobody to ask.
+    pub questioner: Option<Arc<dyn Questioner>>,
+    pub taint: Arc<Taint>,
 }
 
 impl std::fmt::Debug for ToolContext {

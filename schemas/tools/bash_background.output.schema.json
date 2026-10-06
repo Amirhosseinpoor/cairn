@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    }
+  },
+  "title": "bash_background output",
+  "description": "The `data` object of a successful result."
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "lines": {
+      "type": "array"
+    },
+    "next_since_line": {
+      "type": "integer"
+    },
+    "running": {
+      "type": "boolean"
+    },
+    "exit_code": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "bytes_total": {
+      "type": "integer"
+    }
+  },
+  "title": "job_output output",
+  "description": "The `data` object of a successful result."
+}

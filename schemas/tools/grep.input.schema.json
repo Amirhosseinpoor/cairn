@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "pattern"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "pattern": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Rust regex"
+    },
+    "path": {
+      "type": "string",
+      "default": "."
+    },
+    "glob": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "description": "e.g. *.rs"
+    },
+    "case_insensitive": {
+      "type": "boolean",
+      "default": false
+    },
+    "multiline": {
+      "type": "boolean",
+      "default": false
+    },
+    "context_lines": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 5,
+      "default": 0
+    },
+    "max_results": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5000,
+      "default": 200
+    },
+    "max_file_size_kb": {
+      "type": "integer",
+      "default": 1024
+    },
+    "respect_ignore": {
+      "type": "boolean",
+      "default": true
+    },
+    "include_binary": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "title": "grep input",
+  "description": "Search file contents with a Rust regular expression. Returns path, line, column and the matching line, with optional context. Binary and ignored files are skipped (binary files are counted). Narrow with `path` and `glob` for speed."
+}

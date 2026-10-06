@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "upstream": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ahead": {
+      "type": "integer"
+    },
+    "behind": {
+      "type": "integer"
+    },
+    "staged": {
+      "type": "array"
+    },
+    "unstaged": {
+      "type": "array"
+    },
+    "untracked": {
+      "type": "array"
+    },
+    "conflicts": {
+      "type": "array"
+    },
+    "clean": {
+      "type": "boolean"
+    },
+    "detached": {
+      "type": "boolean"
+    },
+    "rebase_in_progress": {
+      "type": "boolean"
+    }
+  },
+  "title": "git_status output",
+  "description": "The `data` object of a successful result."
+}

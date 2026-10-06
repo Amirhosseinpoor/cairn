@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "matches": {
+      "type": "array"
+    },
+    "match_count": {
+      "type": "integer"
+    },
+    "files_searched": {
+      "type": "integer"
+    },
+    "binary_skipped": {
+      "type": "integer"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "duration_ms": {
+      "type": "integer"
+    }
+  },
+  "title": "grep output",
+  "description": "The `data` object of a successful result."
+}

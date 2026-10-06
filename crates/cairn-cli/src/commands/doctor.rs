@@ -170,12 +170,11 @@ fn collect(startup: &super::Startup, args: &DoctorArgs) -> Vec<Row> {
     rows.push(row_20_terminal());
     rows.push(row_21_clock(net.as_ref()));
     rows.push(row_22_orphans(startup));
-    rows.push(Row::skip(23, "tool table", "info", "--tools needs M2"));
+    rows.push(row_23_tools(args.tools));
     rows.push(row_24_env());
     rows.push(row_25_self_check(startup, args.deep));
     // The flags select extra rows; until their subsystems land they only change
     // what the SKIP rows promise, so they are recorded in the details above.
-    let _ = args.tools;
     rows
 }
 
@@ -714,6 +713,56 @@ fn row_15_mcp(cfg: &cairn_config::Config) -> Row {
             format!("{n} configured; connection checked in M4"),
         )
     }
+}
+
+/// §6.1's table, from live registration (REQ-TOOL-001).
+fn row_23_tools(list: bool) -> Row {
+    let mut registry = cairn_tools::Registry::new();
+    if let Err(e) = cairn_tools::builtin::register_all(&mut registry) {
+        return Row::new(
+            23,
+            "tool table",
+            "error",
+            Status::Fail,
+            format!("tool registration failed: {e}"),
+        )
+        .code(cairn_core::error::codes::LOOP_INVARIANT);
+    }
+    let table = registry.table();
+    if !list {
+        return Row::pass(
+            23,
+            "tool table",
+            "info",
+            format!("{} tools registered (--tools lists them)", table.len()),
+        );
+    }
+    let mut lines = vec![format!(
+        "{} tools registered; subagent arrives with M4",
+        table.len()
+    )];
+    lines.push(format!(
+        "{:<16} {:<10} {:<8} {:<14} {:>9} {:>9} {}",
+        "tool", "class", "effect", "idempotency", "timeout", "max out", "serial"
+    ));
+    for row in table {
+        let timeout = if row.timeout_ms == 0 {
+            "none".to_string()
+        } else {
+            format!("{} s", row.timeout_ms / 1000)
+        };
+        lines.push(format!(
+            "{:<16} {:<10} {:<8} {:<14} {:>9} {:>9} {}",
+            row.name,
+            row.class,
+            row.side_effect,
+            row.idempotency,
+            timeout,
+            format!("{} KiB", row.max_output_bytes / 1024),
+            if row.serial { "yes" } else { "no" },
+        ));
+    }
+    Row::pass(23, "tool table", "info", lines.join("\n"))
 }
 
 fn row_16_checkpoints(startup: &super::Startup) -> Row {

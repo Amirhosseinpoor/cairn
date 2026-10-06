@@ -106,8 +106,12 @@ impl Tool for Bash {
     }
 
     fn timeout(&self) -> Duration {
-        // The call's own `timeout_ms` (at most 600 s) governs; this is the
-        // outer bound with room for the kill sequence.
+        // §6.1's default; a call may ask for up to 600 s.
+        Duration::from_secs(120)
+    }
+
+    fn max_timeout(&self) -> Duration {
+        // 600 s and room for the kill sequence.
         Duration::from_secs(610)
     }
 

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "path",
+    "old_string",
+    "new_string"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "old_string": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "new_string": {
+      "type": "string",
+      "maxLength": 20000
+    },
+    "replace_all": {
+      "type": "boolean",
+      "default": false
+    },
+    "expect_occurrences": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "fuzzy": {
+      "enum": [
+        "off",
+        "normal",
+        "relaxed"
+      ],
+      "default": "normal"
+    }
+  },
+  "title": "edit_file input",
+  "description": "Replace text in an existing file. `old_string` must match exactly once (include surrounding lines to make it unique) unless you pass replace_all or expect_occurrences. Whitespace differences are forgiven (fuzzy matching) and reported. The result is syntax-checked and rolled back if it breaks the file."
+}

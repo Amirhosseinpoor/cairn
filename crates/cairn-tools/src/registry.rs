@@ -158,6 +158,15 @@ impl Registry {
             .collect()
     }
 
+    /// Each tool's output schema, by name.
+    #[must_use]
+    pub fn output_schemas(&self) -> Vec<(&'static str, serde_json::Value)> {
+        self.entries
+            .values()
+            .map(|e| (e.tool.name(), e.tool.output_schema()))
+            .collect()
+    }
+
     /// §6.1's table.
     #[must_use]
     pub fn table(&self) -> Vec<TableRow> {

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string"
+    },
+    "status": {
+      "type": "integer"
+    },
+    "content_type": {
+      "type": "string"
+    },
+    "markdown": {
+      "type": "string"
+    },
+    "bytes": {
+      "type": "integer"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "final_url": {
+      "type": "string"
+    },
+    "titles": {
+      "type": "array"
+    }
+  },
+  "title": "web_fetch output",
+  "description": "The `data` object of a successful result."
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exit_code": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "signal": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "stdout": {
+      "type": "string"
+    },
+    "stderr": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "integer"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "command": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "shell": {
+      "type": "string"
+    }
+  },
+  "title": "bash output",
+  "description": "The `data` object of a successful result."
+}

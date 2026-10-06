@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "absolute_path": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "start_line": {
+      "type": "integer"
+    },
+    "end_line": {
+      "type": "integer"
+    },
+    "total_lines": {
+      "type": "integer"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "encoding": {
+      "type": "string"
+    },
+    "binary": {
+      "type": "boolean"
+    },
+    "sha256": {
+      "type": "string"
+    },
+    "crlf": {
+      "type": "boolean"
+    },
+    "language": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "read_file output",
+  "description": "The `data` object of a successful result."
+}

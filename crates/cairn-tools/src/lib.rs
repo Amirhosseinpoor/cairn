@@ -31,6 +31,6 @@ pub use syntax::ParseCheck;
 pub use tool::Tool;
 pub use types::{
     Access, EventSink, FileState, Idempotency, LineEndings, NoSyntax, NullSink, PathArg,
-    PermissionClass, RequestInfo, ShellRequest, SideEffect, SyntaxCheck, SyntaxProblem,
-    SyntaxVerdict, ToolContext, ToolError, ToolOutput,
+    PermissionClass, Question, Questioner, Reply, RequestInfo, ShellRequest, SideEffect,
+    SyntaxCheck, SyntaxProblem, SyntaxVerdict, Taint, ToolContext, ToolError, ToolOutput,
 };

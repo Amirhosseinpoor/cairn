@@ -29,6 +29,12 @@ pub trait Tool: Send + Sync + 'static {
     fn idempotency(&self) -> Idempotency;
     fn timeout(&self) -> Duration;
     fn max_output_bytes(&self) -> u32;
+    /// The longest one call may run. §6.1's `timeout` column is the usual
+    /// time, `timeout()`; a few tools let a call ask for more (`bash`'s
+    /// `timeout_ms`), and this is the ceiling that request is held to.
+    fn max_timeout(&self) -> Duration {
+        self.timeout()
+    }
     /// Takes the global serial lock (§6.6).
     fn requires_serial(&self) -> bool {
         false
@@ -43,6 +49,16 @@ pub trait Tool: Send + Sync + 'static {
     /// The command and URL the permission engine should see.
     fn request_info(&self, _input: &Value) -> RequestInfo {
         RequestInfo::default()
+    }
+
+    /// Cheap checks that need neither the filesystem nor the network, run
+    /// before anyone is asked for approval: a request that can only fail
+    /// should not interrupt a person first.
+    ///
+    /// # Errors
+    /// The refusal the model should see.
+    fn precheck(&self, _input: &Value) -> Result<(), ToolError> {
+        Ok(())
     }
 
     /// A shell command line to analyse (§9.3) before permission is decided;

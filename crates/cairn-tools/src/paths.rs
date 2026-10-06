@@ -46,6 +46,9 @@ pub struct Resolved {
     pub rel: Option<String>,
     /// §9.4's protected set matched (for this access).
     pub protected: bool,
+    /// The path is a secret store (`.env`, keys, `~/.ssh`) whether or not the
+    /// user lifted its protection: reading it taints the turn (REQ-SAFE-013).
+    pub secret: bool,
 }
 
 impl Resolved {
@@ -314,6 +317,14 @@ impl Boundary {
             .any(|p| p.matcher.is_match(&posix) && (!p.writes_only || access == Access::Write))
     }
 
+    /// A read-protected path, ignoring `allow_protected_paths`.
+    fn is_secret(&self, abs: &Path) -> bool {
+        let posix = to_posix(abs);
+        self.protected
+            .iter()
+            .any(|p| !p.writes_only && p.matcher.is_match(&posix))
+    }
+
     fn relative_to_root(&self, abs: &Path) -> Option<String> {
         abs.strip_prefix(&self.root).ok().map(|rel| {
             let text = to_posix(rel);
@@ -382,6 +393,7 @@ impl Boundary {
         Ok(Resolved {
             rel: self.relative_to_root(&abs),
             protected: self.is_protected(&abs, access),
+            secret: self.is_secret(&abs),
             abs,
         })
     }

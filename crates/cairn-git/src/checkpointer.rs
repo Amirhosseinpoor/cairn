@@ -85,6 +85,8 @@ pub struct Checkpointer {
     git: Mutex<Option<Git>>,
     meta: MetaStore,
     state: Mutex<State>,
+    /// The turn the last checkpoint belongs to.
+    turn: std::sync::atomic::AtomicU64,
 }
 
 impl std::fmt::Debug for Checkpointer {
@@ -157,6 +159,7 @@ impl Checkpointer {
             limits,
             git: Mutex::new(git),
             state: Mutex::new(State::default()),
+            turn: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -209,6 +212,7 @@ impl Checkpointer {
     /// # Errors
     /// `E-CHK-FAIL` when the snapshot or the index cannot be written.
     pub fn begin_turn(&self, turn: u64, label: &str) -> Result<Checkpoint, ChkError> {
+        self.turn.store(turn, std::sync::atomic::Ordering::Relaxed);
         let mut st = lock(&self.state);
         let _ = self.flush(&st);
         *st = State::default();
@@ -687,6 +691,13 @@ fn write_items(root: &Path, items: &BTreeMap<String, Item>) -> Result<(), ChkErr
 }
 
 impl WriteObserver for Checkpointer {
+    fn checkpoint(&self, label: &str) {
+        let turn = self.turn.load(std::sync::atomic::Ordering::Relaxed);
+        if let Err(e) = self.begin_turn(turn, label) {
+            lock(&self.state).warnings.push(e);
+        }
+    }
+
     fn before_write(&self, abs: &Path) {
         let Some(rel) = self.rel_of(abs) else { return };
         let mut st = lock(&self.state);

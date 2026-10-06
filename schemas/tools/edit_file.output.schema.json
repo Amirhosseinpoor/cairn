@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "occurrences": {
+      "type": "integer"
+    },
+    "replaced": {
+      "type": "integer"
+    },
+    "start_line": {
+      "type": "integer"
+    },
+    "end_line": {
+      "type": "integer"
+    },
+    "sha256_before": {
+      "type": "string"
+    },
+    "sha256_after": {
+      "type": "string"
+    },
+    "syntax_ok": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "fuzzy_used": {
+      "type": "boolean"
+    },
+    "fuzzy_score": {
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
+  "title": "edit_file output",
+  "description": "The `data` object of a successful result."
+}

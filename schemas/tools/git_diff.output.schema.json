@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "diff": {
+      "type": "string"
+    },
+    "files_changed": {
+      "type": "integer"
+    },
+    "insertions": {
+      "type": "integer"
+    },
+    "deletions": {
+      "type": "integer"
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  },
+  "title": "git_diff output",
+  "description": "The `data` object of a successful result."
+}

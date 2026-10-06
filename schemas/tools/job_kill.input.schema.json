@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "job_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "signal": {
+      "enum": [
+        "SIGTERM",
+        "SIGINT",
+        "SIGKILL"
+      ],
+      "default": "SIGTERM"
+    }
+  },
+  "title": "job_kill input",
+  "description": "Stop a background job by signalling its whole process group (SIGTERM by default)."
+}

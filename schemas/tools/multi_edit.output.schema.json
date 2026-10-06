@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "applied": {
+      "type": "integer"
+    },
+    "failed_index": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "sha256_after": {
+      "type": "string"
+    },
+    "syntax_ok": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "title": "multi_edit output",
+  "description": "The `data` object of a successful result."
+}

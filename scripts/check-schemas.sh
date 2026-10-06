@@ -38,6 +38,7 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/config"
 cargo run -q -p cairn-config --example dump_schema -- "$tmp/config/config.schema.json" >/dev/null
 cargo run -q -p cairn-core --example dump_event_schemas -- "$tmp/events" >/dev/null
+cargo run -q -p cairn-tools --example dump_tool_schemas -- "$tmp/tools" >/dev/null
 
 # ------------------------------------------------------------------- accept
 
@@ -45,8 +46,12 @@ if [ "$WRITE" -eq 1 ]; then
     mkdir -p schemas/events
     cp "$tmp/config/config.schema.json" schemas/config.schema.json
     cp "$tmp"/events/*.schema.json schemas/events/
-    printf 'regenerated schemas/config.schema.json and %d event schema(s)\n' \
-        "$(find "$tmp/events" -name '*.schema.json' | wc -l)"
+    mkdir -p schemas/tools
+    find schemas/tools -name '*.schema.json' -delete
+    cp "$tmp"/tools/*.schema.json schemas/tools/
+    printf 'regenerated schemas/config.schema.json, %d event and %d tool schema(s)\n' \
+        "$(find "$tmp/events" -name '*.schema.json' | wc -l)" \
+        "$(find "$tmp/tools" -name '*.schema.json' | wc -l)"
 fi
 
 # --------------------------------------------------------------------- diff
@@ -87,11 +92,22 @@ for committed in schemas/events/*.schema.json; do
     fi
 done
 
-# `schemas/tools/*.schema.json` arrives with the M4 tool registry (§6); there is
-# nothing to diff against a generator until then.
-if [ -d schemas/tools ] && [ -n "$(ls -A schemas/tools 2>/dev/null)" ]; then
-    printf 'note: schemas/tools/ present; the M4 generator is not wired up yet\n'
-fi
+tool_count=0
+for generated in "$tmp"/tools/*.schema.json; do
+    [ -e "$generated" ] || continue
+    tool_count=$((tool_count + 1))
+    name=$(basename "$generated")
+    diff_against "$generated" "schemas/tools/$name" "tool $name"
+done
+
+for committed in schemas/tools/*.schema.json; do
+    [ -e "$committed" ] || continue
+    if [ ! -e "$tmp/tools/$(basename "$committed")" ]; then
+        printf 'FAIL: tool %s: %s has no generator (stale file?)\n' \
+            "$(basename "$committed")" "$committed" >&2
+        failures=$((failures + 1))
+    fi
+done
 
 # ------------------------------------------------------------------- result
 
@@ -101,4 +117,4 @@ if [ "$failures" -ne 0 ]; then
     exit 1
 fi
 
-printf 'schemas: clean (%d event schema(s) + config)\n' "$generated_count"
+printf 'schemas: clean (%d event schema(s), %d tool schema(s) + config)\n' "$generated_count" "$tool_count"

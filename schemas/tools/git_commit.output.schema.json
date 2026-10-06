@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sha": {
+      "type": "string"
+    },
+    "short_sha": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "files": {
+      "type": "integer"
+    },
+    "insertions": {
+      "type": "integer"
+    },
+    "deletions": {
+      "type": "integer"
+    }
+  },
+  "title": "git_commit output",
+  "description": "The `data` object of a successful result."
+}

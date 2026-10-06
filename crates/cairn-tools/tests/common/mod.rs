@@ -98,6 +98,9 @@ pub struct Options {
     pub approval_timeout: Duration,
     pub syntax: Option<Arc<dyn cairn_tools::SyntaxCheck>>,
     pub observer: Option<Arc<dyn cairn_git::WriteObserver>>,
+    pub questioner: Option<Arc<dyn cairn_tools::Questioner>>,
+    /// `security.allow_protected_paths`.
+    pub allow_protected: Vec<String>,
 }
 
 impl Default for Options {
@@ -110,6 +113,8 @@ impl Default for Options {
             approval_timeout: Duration::from_secs(600),
             syntax: None,
             observer: None,
+            questioner: None,
+            allow_protected: Vec::new(),
         }
     }
 }
@@ -149,8 +154,15 @@ impl Fixture {
             .expect("policy"),
         );
         let boundary = Arc::new(
-            Boundary::new(&root, &[], false, Some(base.join("home")), &[], false)
-                .expect("boundary"),
+            Boundary::new(
+                &root,
+                &[],
+                false,
+                Some(base.join("home")),
+                &options.allow_protected,
+                false,
+            )
+            .expect("boundary"),
         );
         let ignore = Arc::new(IgnoreEngine::new(
             boundary.root(),
@@ -173,6 +185,7 @@ impl Fixture {
             syntax: options.syntax,
             line_endings: cairn_tools::LineEndings::Lf,
             observer: options.observer,
+            questioner: options.questioner,
             approval_timeout: options.approval_timeout,
         }));
         let env = CallEnv {

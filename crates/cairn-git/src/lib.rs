@@ -24,6 +24,7 @@ mod checkpointer;
 mod fs_backend;
 mod git_backend;
 mod meta;
+pub mod ops;
 
 use std::path::Path;
 
@@ -40,6 +41,8 @@ pub trait WriteObserver: Send + Sync {
     fn before_write(&self, abs: &Path);
     /// `abs` now holds content hashing to `sha256`.
     fn after_write(&self, abs: &Path, sha256: &str);
+    /// A named snapshot is wanted now (before a commit, §9.8).
+    fn checkpoint(&self, _label: &str) {}
 }
 
 /// A [`WriteObserver`] that records nothing, for runs with checkpoints off.

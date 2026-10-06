@@ -158,6 +158,8 @@ pub struct Executor {
     line_endings: LineEndings,
     observer: Arc<dyn cairn_git::WriteObserver>,
     jobs: Arc<crate::shell::jobs::JobTable>,
+    questioner: Option<Arc<dyn crate::types::Questioner>>,
+    taint: Arc<crate::types::Taint>,
     file_state: Arc<FileState>,
     approval_timeout: Duration,
     reads: Semaphore,
@@ -196,6 +198,8 @@ pub struct ExecutorParts {
     pub line_endings: LineEndings,
     /// Checkpoint hook; `None` records nothing.
     pub observer: Option<Arc<dyn cairn_git::WriteObserver>>,
+    /// Who answers `ask_user`; `None` means nobody can.
+    pub questioner: Option<Arc<dyn crate::types::Questioner>>,
     /// `permissions.ask_timeout_ms` (§8.1; default 10 minutes).
     pub approval_timeout: Duration,
 }
@@ -277,6 +281,8 @@ impl Executor {
             syntax: parts.syntax.unwrap_or_else(|| Arc::new(NoSyntax)),
             line_endings: parts.line_endings,
             jobs: Arc::new(crate::shell::jobs::JobTable::new()),
+            questioner: parts.questioner,
+            taint: Arc::new(crate::types::Taint::default()),
             file_state: Arc::new(FileState::default()),
             approval_timeout: parts.approval_timeout,
             reads: Semaphore::new(MAX_PARALLEL_READS),
@@ -364,6 +370,11 @@ impl Executor {
                 return self.finish_early(call, started, &error, ToolStatus::Error, false);
             }
         }
+        // Pure checks first: nothing to ask a person about a request that
+        // can only fail.
+        if let Err(error) = tool.precheck(&call.input) {
+            return self.finish_early(call, started, &error, ToolStatus::Denied, true);
+        }
         // 3–5: normalize, boundary, protected paths.
         let mut resolved = Vec::new();
         for arg in tool.path_args(&call.input) {
@@ -379,7 +390,12 @@ impl Executor {
                     .recovery("Choose another path; the user can lift this with security.allow_protected_paths.");
                     return self.finish_early(call, started, &error, ToolStatus::Denied, true);
                 }
-                Ok(r) => resolved.push((arg.access, r)),
+                Ok(r) => {
+                    if r.secret && arg.access == Access::Read {
+                        self.taint.secrets_read(env.turn_id);
+                    }
+                    resolved.push((arg.access, r));
+                }
                 Err(error) => {
                     return self.finish_early(call, started, &error, ToolStatus::Error, false)
                 }
@@ -440,6 +456,8 @@ impl Executor {
             line_endings: self.line_endings,
             observer: Arc::clone(&self.observer),
             jobs: Arc::clone(&self.jobs),
+            questioner: self.questioner.clone(),
+            taint: Arc::clone(&self.taint),
         };
         let write_target = resolved
             .iter()
@@ -765,7 +783,7 @@ impl Executor {
                 _serial_barrier = Some(self.barrier.write().await);
             }
         }
-        let timeout = tool.timeout();
+        let timeout = tool.max_timeout();
         let work = tool.execute(input, ctx, cancel.clone());
         let timed = tokio::time::timeout(timeout, work);
         let cancelled = async {

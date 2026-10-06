@@ -228,6 +228,25 @@ impl IgnoreEngine {
         self.layered(path, is_dir) == Some(true)
     }
 
+    /// Whether a `.cairnignore` rule (and nothing else) excludes `path`: the
+    /// question `git_commit` asks, since `.gitignore` already decides what
+    /// git tracks (REQ-TOOL-007).
+    #[must_use]
+    pub fn cairnignored(&self, path: &Path, is_dir: bool) -> bool {
+        let Ok(rel) = path.strip_prefix(&self.root) else {
+            return false;
+        };
+        let mut ancestor = self.root.clone();
+        let parts: Vec<_> = rel.components().collect();
+        for part in parts.iter().take(parts.len().saturating_sub(1)) {
+            ancestor.push(part.as_os_str());
+            if self.chain(Source::Cairnignore, &ancestor, true) == Some(true) {
+                return true;
+            }
+        }
+        self.chain(Source::Cairnignore, path, is_dir) == Some(true)
+    }
+
     /// Whether the user asked for this path by name — a config `include`
     /// match or a `.cairnignore` `!` line — which is what lets a hidden file
     /// through a walk (§5.1 "Hidden files").

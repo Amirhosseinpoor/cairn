@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "todos_saved": {
+      "type": "integer"
+    },
+    "completed": {
+      "type": "integer"
+    },
+    "pending": {
+      "type": "integer"
+    },
+    "plan_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "todo_write output",
+  "description": "The `data` object of a successful result."
+}

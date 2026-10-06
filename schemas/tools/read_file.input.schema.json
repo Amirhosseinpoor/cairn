@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute or workspace-relative path"
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "1-based start line"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2000,
+      "default": 2000
+    },
+    "encoding": {
+      "enum": [
+        "utf-8"
+      ],
+      "default": "utf-8"
+    }
+  },
+  "title": "read_file input",
+  "description": "Read a UTF-8 text file from the workspace, or a range of its lines. Output is line-numbered (`LINE<TAB>text`, 1-based) so you can cite lines. Use `offset` and `limit` for large files (at most 2000 lines or 200 KiB per call)."
+}

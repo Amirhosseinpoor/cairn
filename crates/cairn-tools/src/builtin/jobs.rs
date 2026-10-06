@@ -128,6 +128,11 @@ impl Tool for BashBackground {
     }
 
     fn timeout(&self) -> Duration {
+        // A job has no time limit; starting one is quick.
+        Duration::ZERO
+    }
+
+    fn max_timeout(&self) -> Duration {
         Duration::from_secs(30)
     }
 
@@ -252,6 +257,11 @@ impl Tool for JobOutput {
     }
 
     fn timeout(&self) -> Duration {
+        Duration::from_secs(10)
+    }
+
+    fn max_timeout(&self) -> Duration {
+        // `wait_ms` may hold the call for up to 60 s.
         Duration::from_secs(70)
     }
 

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "todos"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "todos": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "content",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_.-]{1,64}$"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "activeForm": {
+            "type": "string",
+            "maxLength": 120
+          }
+        }
+      }
+    },
+    "plan_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    }
+  },
+  "title": "todo_write input",
+  "description": "Record the task list for this work. Each call REPLACES the whole list, so always send every item. Statuses: pending, in_progress, completed, failed, cancelled. Keep at most one item in_progress. Use it for work with three or more steps, and update it as you go."
+}
