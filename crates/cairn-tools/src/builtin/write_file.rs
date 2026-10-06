@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use super::common::{object_schema, parse};
 use super::fsio::{
     check_syntax, line_delta, load, resolve_for_write, sha256_hex, staleness, syntax_ok,
-    write_atomic, Staleness,
+    write_observed, Staleness,
 };
 use crate::edit::encode_like;
 use crate::tool::Tool;
@@ -157,7 +157,8 @@ async fn write(input: &Input, ctx: &ToolContext) -> Result<ToolOutput, ToolError
     // is checked and reported, never refused.
     let verdict = check_syntax(ctx, &shown, old_text, &new_text).await;
     let bytes = encode_like(&new_text, bom, eol);
-    write_atomic(
+    write_observed(
+        ctx,
         &resolved.abs,
         &bytes,
         mode,

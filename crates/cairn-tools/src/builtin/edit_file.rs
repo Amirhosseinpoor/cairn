@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use super::common::{object_schema, parse};
 use super::fsio::{
     check_syntax, load, resolve_for_write, sha256_hex, stale_edit_error, staleness, syntax_error,
-    syntax_ok, write_atomic, Staleness,
+    syntax_ok, write_observed, Staleness,
 };
 use crate::edit::{apply, apply_multi, Applied, EditError, EditSpec, Fuzzy, MultiError};
 use crate::tool::Tool;
@@ -253,7 +253,7 @@ async fn edit_one(input: &EditInput, ctx: &ToolContext) -> Result<ToolOutput, To
         return Err(syntax_error(&shown, problem));
     }
     let bytes = file.doc.encode(&new_text);
-    write_atomic(&resolved.abs, &bytes, file.mode, false)?;
+    write_observed(ctx, &resolved.abs, &bytes, file.mode, false)?;
     let sha_after = sha256_hex(&bytes);
     ctx.file_state
         .record(resolved.abs.clone(), sha_after.clone(), Some(&new_text));
@@ -458,7 +458,7 @@ async fn edit_many(input: &MultiInput, ctx: &ToolContext) -> Result<ToolOutput, 
         return Err(syntax_error(&shown, problem));
     }
     let bytes = file.doc.encode(&new_text);
-    write_atomic(&resolved.abs, &bytes, file.mode, false)?;
+    write_observed(ctx, &resolved.abs, &bytes, file.mode, false)?;
     let sha_after = sha256_hex(&bytes);
     ctx.file_state
         .record(resolved.abs.clone(), sha_after.clone(), Some(&new_text));

@@ -354,6 +354,8 @@ pub struct ToolContext {
     pub file_state: Arc<FileState>,
     pub syntax: Arc<dyn SyntaxCheck>,
     pub line_endings: LineEndings,
+    /// Told about every write so a checkpoint can protect the file (§9.8).
+    pub observer: Arc<dyn cairn_git::WriteObserver>,
 }
 
 impl std::fmt::Debug for ToolContext {

@@ -349,6 +349,82 @@ impl LoopHooks for Persist<'_> {
     }
 }
 
+/// §9.8: the checkpoint store, unless checkpoints are off or the mode cannot
+/// write anyway.
+fn open_checkpoints(plan: &Plan, session_id: &str) -> Option<Arc<cairn_git::Checkpointer>> {
+    if !plan.config.checkpoint.enabled || !plan.run_mode.allows_side_effects() {
+        return None;
+    }
+    let cc = &plan.config.checkpoint;
+    Some(Arc::new(cairn_git::Checkpointer::open(
+        &plan.workspace,
+        session_id,
+        cairn_git::Limits {
+            per_session: cc.keep_per_session as usize,
+            global: cc.keep_total as usize,
+            max_total_bytes: cc.max_total_bytes,
+            ..cairn_git::Limits::default()
+        },
+    )))
+}
+
+/// Snapshot before the turn. A failure is `W-CHK-FAIL`, never fatal.
+fn begin_checkpoint(ck: &cairn_git::Checkpointer, turn_id: u64, emitter: &Emitter, quiet: bool) {
+    match ck.begin_turn(turn_id, "turn") {
+        Ok(made) => emitter.publish(EventData::CheckpointCreated {
+            checkpoint_id: made.id,
+            r#ref: made.ref_name.unwrap_or_default(),
+            bytes: made.bytes,
+            files: u32::try_from(made.files).unwrap_or(u32::MAX),
+        }),
+        Err(e) if !quiet => crate::output::warn_line(
+            cairn_core::error::codes::W_CHK_FAIL,
+            &format!("no checkpoint for this turn: {}", e.message),
+        ),
+        Err(_) => {}
+    }
+}
+
+/// Persist what the turn wrote and surface anything the store warned about.
+fn end_checkpoint(ck: &cairn_git::Checkpointer, quiet: bool) {
+    ck.end_turn();
+    if !quiet {
+        for warning in ck.take_warnings() {
+            crate::output::warn_line(warning.code, &warning.message);
+        }
+    }
+}
+
+/// Write the guardrail trip and provider fault, if any, before the turn ends.
+fn record_faults(
+    writer: &mut SessionWriter,
+    emitter: &Emitter,
+    outcome: &LoopOutcome,
+) -> Result<(), Fail> {
+    if let LoopEnd::Guardrail {
+        rule,
+        limit,
+        actual,
+    } = &outcome.end
+    {
+        writer
+            .guardrail(rule, *limit, *actual)
+            .map_err(flush_fail)?;
+        // REQ-MODE-009: the trip is announced before the turn ends.
+        emitter.publish(EventData::GuardrailTrip {
+            rule: (*rule).to_string(),
+            limit: serde_json::json!(limit),
+            actual: serde_json::json!(actual),
+        });
+    }
+    if let Some(fault) = &outcome.fault {
+        writer
+            .error(fault.code().unwrap_or("ERR_GENERIC"), &fault.message)
+            .map_err(flush_fail)?;
+    }
+    Ok(())
+}
+
 /// Run one headless turn; returns the process exit code (0 / 7) or the
 /// failure to report (3 provider, 4 guardrail, 6 denied, 9 session, 13
 /// flush, ...).
@@ -379,7 +455,11 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
     } else {
         Arc::new(Progress { quiet: plan.quiet })
     };
+    let checkpoints = open_checkpoints(&plan, &session_id);
     let executor = crate::toolkit::build(&crate::toolkit::Wiring {
+        observer: checkpoints
+            .clone()
+            .map(|c| c as Arc<dyn cairn_git::WriteObserver>),
         config: &plan.config,
         paths: &plan.paths,
         workspace: &plan.workspace,
@@ -498,6 +578,9 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         cwd: plan.workspace.clone(),
         mode: plan.run_mode,
     };
+    if let Some(ck) = &checkpoints {
+        begin_checkpoint(ck, turn_id, &emitter, plan.quiet);
+    }
     let outcome = {
         let mut hooks = Persist {
             writer: &mut writer,
@@ -521,29 +604,12 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         .map_err(flush_fail)?
     };
 
+    if let Some(ck) = &checkpoints {
+        end_checkpoint(ck, plan.quiet);
+    }
     let (usage, cost_usd) = total_usage(&outcome, prompt_tokens, &plan.live.pricing);
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    if let LoopEnd::Guardrail {
-        rule,
-        limit,
-        actual,
-    } = &outcome.end
-    {
-        writer
-            .guardrail(rule, *limit, *actual)
-            .map_err(flush_fail)?;
-        // REQ-MODE-009: the trip is announced before the turn ends.
-        emitter.publish(EventData::GuardrailTrip {
-            rule: (*rule).to_string(),
-            limit: serde_json::json!(limit),
-            actual: serde_json::json!(actual),
-        });
-    }
-    if let Some(fault) = &outcome.fault {
-        writer
-            .error(fault.code().unwrap_or("ERR_GENERIC"), &fault.message)
-            .map_err(flush_fail)?;
-    }
+    record_faults(&mut writer, &emitter, &outcome)?;
     writer
         .turn_ended(
             turn_id,

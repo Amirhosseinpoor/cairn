@@ -97,6 +97,7 @@ pub struct Options {
     pub builtin: bool,
     pub approval_timeout: Duration,
     pub syntax: Option<Arc<dyn cairn_tools::SyntaxCheck>>,
+    pub observer: Option<Arc<dyn cairn_git::WriteObserver>>,
 }
 
 impl Default for Options {
@@ -108,6 +109,7 @@ impl Default for Options {
             builtin: true,
             approval_timeout: Duration::from_secs(600),
             syntax: None,
+            observer: None,
         }
     }
 }
@@ -170,6 +172,7 @@ impl Fixture {
             redactor: Arc::new(Redactor::default()),
             syntax: options.syntax,
             line_endings: cairn_tools::LineEndings::Lf,
+            observer: options.observer,
             approval_timeout: options.approval_timeout,
         }));
         let env = CallEnv {

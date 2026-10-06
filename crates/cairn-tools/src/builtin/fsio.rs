@@ -286,6 +286,20 @@ pub fn write_atomic(
     Ok(())
 }
 
+/// [`write_atomic`] with the checkpoint told before and after.
+pub fn write_observed(
+    ctx: &ToolContext,
+    path: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+    create_dirs: bool,
+) -> Result<(), ToolError> {
+    ctx.observer.before_write(path);
+    write_atomic(path, bytes, mode, create_dirs)?;
+    ctx.observer.after_write(path, &sha256_hex(bytes));
+    Ok(())
+}
+
 /// `(added, removed)` line counts between two texts.
 #[must_use]
 pub fn line_delta(old: &str, new: &str) -> (usize, usize) {

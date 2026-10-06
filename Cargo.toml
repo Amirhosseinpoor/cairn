@@ -33,6 +33,7 @@ clap_complete = "4.5"
 toml_edit = "0.22"
 jsonschema = { version = "0.46", default-features = false }
 similar = "2"
+git2 = { version = "0.19", default-features = false }
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
 tree-sitter-python = "0.23"
@@ -67,6 +68,7 @@ cairn-session = { path = "crates/cairn-session", version = "0.1.0" }
 cairn-testkit = { path = "crates/cairn-testkit", version = "0.1.0" }
 cairn-sse = { path = "crates/cairn-sse", version = "0.1.0" }
 cairn-perm = { path = "crates/cairn-perm", version = "0.1.0" }
+cairn-git = { path = "crates/cairn-git", version = "0.1.0" }
 cairn-tools = { path = "crates/cairn-tools", version = "0.1.0" }
 cairn-search = { path = "crates/cairn-search", version = "0.1.0" }
 cairn-parse = { path = "crates/cairn-parse", version = "0.1.0" }

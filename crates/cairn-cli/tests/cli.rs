@@ -1356,6 +1356,7 @@ fn run_succeeds_in_all_three_formats() {
                         "session.created",
                         "turn.started",
                         "model.request",
+                        "checkpoint.created",
                         "model.delta",
                         "model.usage",
                         "message.appended",
@@ -1661,6 +1662,7 @@ fn stream_json_failure_ends_with_model_error_and_turn_ended() {
             "session.created",
             "turn.started",
             "model.request",
+            "checkpoint.created",
             "model.error",
             "turn.ended"
         ]
@@ -2574,6 +2576,7 @@ fn stream_json_includes_the_tool_lifecycle_events() {
             "session.created",
             "turn.started",
             "model.request",
+            "checkpoint.created",
             "model.usage",
             "message.appended",
             "tool.started",
@@ -2857,4 +2860,65 @@ fn run_prompt_file_feeds_the_prompt() {
     assert_eq!(bodies.len(), 1);
     let request: serde_json::Value = serde_json::from_slice(&bodies[0]).expect("shaped JSON");
     assert_eq!(chat_messages(&request)[0]["content"], "from a file");
+}
+
+/// §9.8 end to end: a turn that writes leaves a checkpoint behind, and
+/// undoing it brings the file back.
+#[test]
+fn t_chk_040_a_writing_turn_leaves_an_undoable_checkpoint() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_sequence(
+        vec![
+            tool_call_body("c0", "read_file", r#"{"path":"notes.txt"}"#),
+            tool_call_body(
+                "c1",
+                "write_file",
+                r#"{"path":"notes.txt","content":"changed\n"}"#,
+            ),
+            answer_body("Done.", "stop"),
+        ],
+        Arc::clone(&bodies),
+    );
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    std::fs::write(fx.ws.join("notes.txt"), "original\n").expect("file");
+    std::fs::write(
+        fx.ws.join(".cairn").join("permissions.json"),
+        r#"{"schema_version":1,"rules":[{"id":"w","effect":"allow","action":"write_file","target":{"kind":"path_glob","value":"**"}}]}"#,
+    )
+    .expect("rules");
+    let out = fx
+        .cairn()
+        .env("CAIRN_OPENAI_API_KEY", "test")
+        .args(["run", "--output", "json", "-p", "change it"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        std::fs::read_to_string(fx.ws.join("notes.txt")).expect("read"),
+        "changed\n"
+    );
+
+    let ck = cairn_git::Checkpointer::open(&fx.ws, "ignored", cairn_git::Limits::default());
+    let store = fx.ws.join(".cairn").join("checkpoints");
+    let index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(store.join("index.json")).expect("index written"))
+            .expect("json");
+    let first = &index["checkpoints"][0];
+    assert_eq!(first["turn"], 1);
+    assert!(first["touched"]["notes.txt"].is_string(), "{first}");
+    drop(ck);
+
+    let session = first["session"].as_str().expect("session").to_string();
+    let undo = cairn_git::Checkpointer::open(&fx.ws, &session, cairn_git::Limits::default());
+    undo.undo(
+        &cairn_git::Target::Last,
+        cairn_git::RestorePolicy::CairnFilesOnly,
+        false,
+    )
+    .expect("undo");
+    assert_eq!(
+        std::fs::read_to_string(fx.ws.join("notes.txt")).expect("read"),
+        "original\n"
+    );
 }

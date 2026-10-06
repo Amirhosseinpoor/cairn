@@ -192,6 +192,7 @@ fn world(mode: Mode) -> World {
         redactor: Arc::new(Redactor::default()),
         syntax: None,
         line_endings: cairn_tools::LineEndings::Lf,
+        observer: None,
         approval_timeout: std::time::Duration::from_secs(1),
     });
     let env = CallEnv {

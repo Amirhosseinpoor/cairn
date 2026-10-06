@@ -156,6 +156,7 @@ pub struct Executor {
     redactor: Arc<Redactor>,
     syntax: Arc<dyn SyntaxCheck>,
     line_endings: LineEndings,
+    observer: Arc<dyn cairn_git::WriteObserver>,
     file_state: Arc<FileState>,
     approval_timeout: Duration,
     reads: Semaphore,
@@ -192,6 +193,8 @@ pub struct ExecutorParts {
     pub syntax: Option<Arc<dyn SyntaxCheck>>,
     /// `line_endings` for new files.
     pub line_endings: LineEndings,
+    /// Checkpoint hook; `None` records nothing.
+    pub observer: Option<Arc<dyn cairn_git::WriteObserver>>,
     /// `permissions.ask_timeout_ms` (§8.1; default 10 minutes).
     pub approval_timeout: Duration,
 }
@@ -267,6 +270,9 @@ impl Executor {
             boundary: parts.boundary,
             ignore: parts.ignore,
             redactor: parts.redactor,
+            observer: parts
+                .observer
+                .unwrap_or_else(|| Arc::new(cairn_git::NoObserver)),
             syntax: parts.syntax.unwrap_or_else(|| Arc::new(NoSyntax)),
             line_endings: parts.line_endings,
             file_state: Arc::new(FileState::default()),
@@ -414,6 +420,7 @@ impl Executor {
             file_state: Arc::clone(&self.file_state),
             syntax: Arc::clone(&self.syntax),
             line_endings: self.line_endings,
+            observer: Arc::clone(&self.observer),
         };
         let write_target = resolved
             .iter()

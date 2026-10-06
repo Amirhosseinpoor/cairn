@@ -32,6 +32,8 @@ pub struct Wiring<'a> {
     /// `--allow-ask`: approvals are answered from stdin.
     pub allow_ask: bool,
     pub quiet: bool,
+    /// Checkpoints (§9.8): told about every write.
+    pub observer: Option<Arc<dyn cairn_git::WriteObserver>>,
 }
 
 fn env(key: &str) -> Option<String> {
@@ -133,6 +135,7 @@ pub fn build(wiring: &Wiring<'_>) -> Result<Arc<Executor>, Fail> {
         ignore,
         redactor: Arc::new(crate::log::redactor_always(config)),
         syntax: Some(Arc::new(cairn_tools::ParseCheck)),
+        observer: wiring.observer.clone(),
         line_endings: match config.line_endings {
             cairn_config::LineEndingsSetting::Auto => cairn_tools::LineEndings::Auto,
             cairn_config::LineEndingsSetting::Lf => cairn_tools::LineEndings::Lf,

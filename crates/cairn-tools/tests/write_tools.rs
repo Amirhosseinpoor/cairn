@@ -961,3 +961,51 @@ async fn multi_edit_and_other_languages_are_validated_too() {
         .await;
     assert_eq!(data(&r)["syntax_ok"], Value::Null);
 }
+
+/// Records what the write tools tell a checkpoint.
+#[derive(Default)]
+struct Recorder(std::sync::Mutex<Vec<String>>);
+
+impl cairn_git::WriteObserver for Recorder {
+    fn before_write(&self, abs: &std::path::Path) {
+        let name = abs.file_name().unwrap().to_string_lossy().into_owned();
+        self.0.lock().unwrap().push(format!("before {name}"));
+    }
+    fn after_write(&self, abs: &std::path::Path, sha256: &str) {
+        let name = abs.file_name().unwrap().to_string_lossy().into_owned();
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("after {name} {sha256}"));
+    }
+}
+
+#[tokio::test]
+async fn t_chk_030_every_write_tool_tells_the_checkpoint_before_and_after() {
+    let recorder = Arc::new(Recorder::default());
+    let fx = Fixture::build(Options {
+        approver: Some(Scripted::with(&[Answer::Session; 64])),
+        observer: Some(Arc::clone(&recorder) as Arc<dyn cairn_git::WriteObserver>),
+        ..Options::default()
+    });
+    fx.write("e.txt", "one\ntwo\n");
+    let seen = json!({"path": "e.txt"});
+    assert!(fx.call("read_file", seen).await.ok);
+    let w = fx
+        .call("write_file", json!({"path": "w.txt", "content": "w\n"}))
+        .await;
+    assert!(w.ok, "{w:?}");
+    let e = fx
+        .call(
+            "edit_file",
+            json!({"path": "e.txt", "old_string": "one", "new_string": "uno"}),
+        )
+        .await;
+    assert!(e.ok, "{e:?}");
+    let log = recorder.0.lock().unwrap().clone();
+    assert_eq!(log.len(), 4, "{log:?}");
+    assert_eq!(log[0], "before w.txt");
+    assert_eq!(log[1], format!("after w.txt {}", sha(b"w\n")));
+    assert_eq!(log[2], "before e.txt");
+    assert_eq!(log[3], format!("after e.txt {}", sha(b"uno\ntwo\n")));
+}
