@@ -349,7 +349,7 @@ fn toml_value_to_edit(v: &toml::Value) -> toml_edit::Value {
     }
 }
 
-fn insert_value(
+pub(crate) fn insert_value(
     doc: &mut toml_edit::DocumentMut,
     parts: &[String],
     value: toml_edit::Value,
@@ -401,7 +401,10 @@ fn insert_value(
     Ok(())
 }
 
-fn remove_value(doc: &mut toml_edit::DocumentMut, parts: &[String]) -> Result<bool, Fail> {
+pub(crate) fn remove_value(
+    doc: &mut toml_edit::DocumentMut,
+    parts: &[String],
+) -> Result<bool, Fail> {
     let (last, parents) = parts.split_last().expect("split_key returns ≥1 part");
     let mut table = doc.as_table_mut();
     for seg in parents {

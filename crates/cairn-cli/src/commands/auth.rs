@@ -3,7 +3,9 @@
 //! M0 resolves keys from the parts of the lookup order that exist without a
 //! keychain: `CAIRN_<PROVIDER>_API_KEY`, the provider-standard env var,
 //! `providers.<id>.api_key` and the workspace-local `.cairn/credentials.toml`.
-//! Keychain storage lands with `login`/`logout` in M1.
+//! `login` stores a key at step 4 (the user config, `0600`); the OS keychain
+//! (step 3) needs a per-platform backend this build does not carry, so
+//! [`KeySource::Keychain`] is reserved and `login` says where the key went.
 
 use crate::args::AuthCmd;
 use crate::commands::Startup;
@@ -21,7 +23,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySource {
     Env,
-    /// Built in M1 together with `auth login` (SPEC §4.10 step 3).
+    /// SPEC §4.10 step 3 — reserved until a keychain backend is built.
     #[allow(dead_code)]
     Keychain,
     File,
@@ -180,22 +182,165 @@ pub fn run(cmd: &AuthCmd, startup: &Startup) -> Result<i32, Fail> {
     match cmd {
         AuthCmd::List { json } => list(*json, startup),
         AuthCmd::Status => status(startup),
-        AuthCmd::Login { provider, .. } => {
+        AuthCmd::Login {
+            provider,
+            key_stdin,
+        } => {
             let provider = resolve_provider(provider.as_deref(), startup)?;
-            Err(Fail::not_implemented(
-                &format!("`cairn auth login {provider}` (keychain storage)"),
-                "M1",
-            ))
+            let key = read_key(&provider, *key_stdin)?;
+            login(&provider, &key, startup)
         }
         AuthCmd::Logout { provider } => {
             let provider = resolve_provider(Some(provider), startup)?;
-            Err(Fail::not_implemented(
-                &format!("`cairn auth logout {provider}` (keychain removal)"),
-                "M1",
-            ))
+            logout(&provider, startup)
         }
     }
 }
+
+/// The key to store: one line from stdin (`--key-stdin`), or a prompt on a
+/// terminal with echo switched off.
+fn read_key(provider: &str, key_stdin: bool) -> Result<String, Fail> {
+    use std::io::{BufRead, IsTerminal};
+    let interactive = std::io::stdin().is_terminal();
+    if !key_stdin && !interactive {
+        return Err(Fail::usage(
+            "no terminal to prompt on",
+            format!("pipe the key in: `cairn auth login {provider} --key-stdin`"),
+        ));
+    }
+    let mut line = String::new();
+    if !key_stdin {
+        eprint!("API key for {provider} (input hidden): ");
+        let _echo = EchoOff::new();
+        std::io::stdin().lock().read_line(&mut line).ok();
+        eprintln!();
+    } else {
+        std::io::stdin().lock().read_line(&mut line).ok();
+    }
+    validate_key(line.trim_end_matches(['\r', '\n']))
+}
+
+/// A key is one token: empty, padded or multi-line input is a typo or a
+/// paste accident, and storing it would fail every later request with a
+/// confusing `E-PROV-AUTH`.
+fn validate_key(key: &str) -> Result<String, Fail> {
+    if key.is_empty() {
+        return Err(Fail::usage(
+            "the key is empty",
+            "paste the API key".to_string(),
+        ));
+    }
+    if key.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(Fail::usage(
+            "the key contains whitespace or control characters",
+            "paste only the key itself".to_string(),
+        ));
+    }
+    Ok(key.to_string())
+}
+
+/// Switches terminal echo off for the life of the guard (POSIX `stty`; other
+/// platforms use `--key-stdin`, which never echoes anything).
+struct EchoOff(bool);
+
+impl EchoOff {
+    fn new() -> Self {
+        #[cfg(unix)]
+        {
+            let ok = std::process::Command::new("stty")
+                .arg("-echo")
+                .status()
+                .is_ok_and(|status| status.success());
+            return Self(ok);
+        }
+        #[cfg(not(unix))]
+        Self(false)
+    }
+}
+
+impl Drop for EchoOff {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if self.0 {
+            let _ = std::process::Command::new("stty").arg("echo").status();
+        }
+    }
+}
+
+fn credential_key(provider: &str) -> Vec<String> {
+    vec![
+        "providers".to_string(),
+        provider.to_string(),
+        "api_key".to_string(),
+    ]
+}
+
+/// Store `key` as `providers.<id>.api_key` in the user config, `0600`.
+fn login(provider: &str, key: &str, startup: &Startup) -> Result<i32, Fail> {
+    use crate::commands::config::{
+        check_config, insert_value, read_config, target_file, write_config,
+    };
+    let file = target_file(startup, false);
+    let text = read_config(&file);
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
+        Fail::usage(
+            format!("{} is not valid TOML: {e}", file.display()),
+            "fix it with `cairn config validate`".to_string(),
+        )
+    })?;
+    let parts = credential_key(provider);
+    insert_value(&mut doc, &parts, toml_edit::Value::from(key), &file)?;
+    check_config(&doc.to_string(), &parts, &file, &text)?;
+    write_config(&file, &doc.to_string())?;
+    restrict(&file);
+    say!(
+        "Stored the {provider} key ({}) in {} (mode 0600). The OS keychain is not available in this build.",
+        last4(key),
+        file.display()
+    );
+    Ok(0)
+}
+
+/// Remove the stored key. Environment variables are not ours to unset.
+fn logout(provider: &str, startup: &Startup) -> Result<i32, Fail> {
+    use crate::commands::config::{
+        check_config, read_config, remove_value, target_file, write_config,
+    };
+    let file = target_file(startup, false);
+    let text = read_config(&file);
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
+        Fail::usage(
+            format!("{} is not valid TOML: {e}", file.display()),
+            "fix it with `cairn config validate`".to_string(),
+        )
+    })?;
+    let parts = credential_key(provider);
+    if remove_value(&mut doc, &parts)? {
+        check_config(&doc.to_string(), &parts, &file, &text)?;
+        write_config(&file, &doc.to_string())?;
+        restrict(&file);
+        say!("Removed the stored {provider} key from {}.", file.display());
+    } else {
+        say!("No stored {provider} key in {}.", file.display());
+    }
+    if lookup(provider, startup).is_some_and(|(source, _)| source == KeySource::Env) {
+        say!(
+            "A key is still set in the environment ({}); unset it in your shell.",
+            standard_env(provider).unwrap_or("CAIRN_*_API_KEY")
+        );
+    }
+    Ok(0)
+}
+
+/// `0600` on a file that now holds key material (REQ-PROV-015).
+#[cfg(unix)]
+fn restrict(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict(_path: &Path) {}
 
 /// Explicit name, else the active model's provider, else a usage error.
 fn resolve_provider(provider: Option<&str>, startup: &Startup) -> Result<String, Fail> {
@@ -357,5 +502,13 @@ mod tests {
         let err = resolve_provider(Some("skynet"), &startup).unwrap_err();
         assert_eq!(err.exit, 2);
         assert_eq!(err.code, codes::CLI_USAGE);
+    }
+
+    #[test]
+    fn a_key_is_one_clean_token() {
+        assert!(validate_key("sk-abc_123").is_ok());
+        for bad in ["", "a b", "a\tb", "a\u{7}b"] {
+            assert!(validate_key(bad).is_err(), "{bad:?}");
+        }
     }
 }

@@ -1191,13 +1191,12 @@ fn mcp_add_and_remove_roundtrip() {
 #[test]
 fn stubs_name_their_milestone() {
     let fx = Fixture::new();
-    let cases: [(&[&str], &str); 6] = [
+    let cases: [(&[&str], &str); 5] = [
         (&["chat"], "M3"),
         (&["init"], "M3"),
         (&["update"], "M5"),
         (&["mcp", "inspect", "x"], "M4"),
         (&["mcp", "refresh"], "M4"),
-        (&["auth", "login", "anthropic"], "M1"),
     ];
     for (args, milestone) in cases {
         let out = fx.cairn().args(args).output().unwrap();
@@ -1821,6 +1820,134 @@ fn resume_without_a_terminal_keeps_the_partial_turn() {
         (last["type"].as_str(), last["status"].as_str()),
         (Some("turn_ended"), Some("recovered"))
     );
+}
+
+fn login(fx: &Fixture, provider: &str, key: &str) -> std::process::Output {
+    fx.cairn()
+        .args(["auth", "login", provider, "--key-stdin"])
+        .write_stdin(key)
+        .output()
+        .expect("runs")
+}
+
+fn auth_row(fx: &Fixture, provider: &str) -> serde_json::Value {
+    let out = fx
+        .cairn()
+        .args(["auth", "list", "--json"])
+        .output()
+        .expect("lists");
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    rows.as_array()
+        .expect("array")
+        .iter()
+        .find(|row| row["provider"] == provider)
+        .cloned()
+        .expect("provider row")
+}
+
+/// `auth login` stores the key where §4.10 step 4 reads it: found as `file`,
+/// last four only in the listing, the key itself never printed, mode 0600.
+#[test]
+fn auth_login_stores_the_key_and_logout_removes_it() {
+    let fx = Fixture::new();
+    assert!(auth_row(&fx, "openai")["source"].is_null());
+
+    let out = login(&fx, "openai", "sk-test-1234567890\n");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let shown = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !shown.contains("sk-test-1234567890"),
+        "the key is never echoed: {shown}"
+    );
+    assert!(shown.contains("7890"), "{shown}");
+
+    let row = auth_row(&fx, "openai");
+    assert_eq!(row["source"], "file");
+    assert_eq!(row["last4"], "…7890");
+    assert!(!row.to_string().contains("sk-test-1234567890"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(fx.user_config())
+            .expect("config")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    let out = fx
+        .cairn()
+        .args(["auth", "logout", "openai"])
+        .output()
+        .expect("logout");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(auth_row(&fx, "openai")["source"].is_null());
+    let text = std::fs::read_to_string(fx.user_config()).expect("config");
+    assert!(!text.contains("sk-test"), "{text}");
+
+    // Logging out twice is not an error, and says there was nothing there.
+    let out = fx
+        .cairn()
+        .args(["auth", "logout", "openai"])
+        .output()
+        .expect("again");
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("No stored"));
+}
+
+/// A key someone pasted badly is refused before it is stored.
+#[test]
+fn auth_login_refuses_an_empty_or_multi_token_key() {
+    let fx = Fixture::new();
+    for bad in ["", "\n", "two words\n", "sk-ok\nsk-second\n"] {
+        let out = login(&fx, "openai", bad);
+        let expect_ok = bad == "sk-ok\nsk-second\n";
+        // Only the first line is the key; a second line is ignored, not stored.
+        if expect_ok {
+            assert_eq!(out.status.code(), Some(0), "{bad:?}");
+        } else {
+            assert_eq!(out.status.code(), Some(2), "{bad:?}: {out:?}");
+        }
+    }
+    let text = std::fs::read_to_string(fx.user_config()).unwrap_or_default();
+    assert!(
+        text.contains("sk-ok") && !text.contains("sk-second"),
+        "{text}"
+    );
+}
+
+/// Without `--key-stdin` and without a terminal there is nothing to prompt.
+#[test]
+fn auth_login_without_a_terminal_or_flag_is_a_usage_error() {
+    let fx = Fixture::new();
+    let out = fx
+        .cairn()
+        .args(["auth", "login", "openai"])
+        .write_stdin("")
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--key-stdin"));
+}
+
+/// A stored key is what `run` authenticates with: no env var, still sent.
+#[test]
+fn run_authenticates_with_a_stored_key() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    assert_eq!(
+        login(&fx, "openai", "sk-stored-key\n").status.code(),
+        Some(0)
+    );
+    let out = fx.cairn().args(["run", "-p", "hi"]).output().expect("runs");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(bodies.lock().expect("bodies").len(), 1);
 }
 
 /// T-CLI-010's failure third: a 401 is exit 3 with the stable code and the
