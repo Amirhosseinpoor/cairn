@@ -36,6 +36,8 @@ pub struct LiveProvider {
     pub max_tokens: u32,
     pub temperature: Option<f64>,
     pub budget: RetryBudget,
+    /// §4.9's price row, `null` figures and all (REQ-PROV-012).
+    pub pricing: cairn_core::registry::Pricing,
 }
 
 /// The effective registry for this run: `models_path` when it loads, the
@@ -193,6 +195,7 @@ pub fn build(config: &Config) -> Result<LiveProvider, Fail> {
         max_tokens,
         temperature,
         budget: RetryBudget::after(std::time::Duration::from_millis(total_ms)),
+        pricing: model_entry.pricing,
     })
 }
 

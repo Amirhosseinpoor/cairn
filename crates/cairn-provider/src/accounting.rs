@@ -221,7 +221,7 @@ mod tests {
         assert!((cost - 0.010_335).abs() < 1e-12, "got {cost}");
     }
 
-    /// REQ-PROV-012: an unknown price is `null`, never a zero.
+    /// REQ-PROV-012, T-PROV-012: an unknown price is `null`, never a zero.
     #[test]
     fn an_unpriced_model_costs_null() {
         let codex = &bundled().models["openai/gpt-5.1-codex"];

@@ -983,7 +983,7 @@ mod tests {
         );
     }
 
-    /// §4.3: a delta for an index with no `ToolCallStart` opens a synthetic
+    /// T-PROV-029, §4.3: a delta for an index with no `ToolCallStart` opens a synthetic
     /// one. The id is minted (`synthetic-{index}`) and the name stays empty —
     /// nothing in the stream has said it yet.
     #[test]

@@ -822,4 +822,107 @@ mod tests {
             stop: StopReason::EndTurn,
         }));
     }
+
+    /// §4.5's fatal HTTP rows, live: one connection (no retry), the matrix's
+    /// code, and a turn that still ends with one terminal `Finish`.
+    /// T-PROV-034 (401), -038 (403), -039 (404), -043 (400 content filter),
+    /// -044 (405).
+    #[tokio::test]
+    async fn fatal_statuses_make_one_call_and_carry_their_code() {
+        use crate::adapters::OpenaiAdapter;
+
+        let cases: [(&str, &str, ProviderFault, &str); 5] = [
+            ("401 Unauthorized", "{}", ProviderFault::Auth, "E-PROV-AUTH"),
+            (
+                "403 Forbidden",
+                "{}",
+                ProviderFault::Forbidden,
+                "E-PROV-FORBID",
+            ),
+            (
+                "404 Not Found",
+                "{}",
+                ProviderFault::NoModel,
+                "E-PROV-NOMODEL",
+            ),
+            (
+                "400 Bad Request",
+                r#"{"error":{"message":"flagged","code":"content_filter"}}"#,
+                ProviderFault::ContentFilter,
+                "E-PROV-FILTER",
+            ),
+            (
+                "405 Method Not Allowed",
+                "{}",
+                ProviderFault::BadRequest,
+                "E-PROV-REQ",
+            ),
+        ];
+        for (status, body, fault, code) in cases {
+            let response = || {
+                (
+                    format!(
+                        "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .into_bytes(),
+                    false,
+                )
+            };
+            let adapter_for = |url: String| {
+                OpenaiAdapter::new(
+                    "openai/gpt-5.1-codex",
+                    cairn_core::registry::bundled(),
+                    Some("key".to_string()),
+                    None,
+                    Some(url),
+                )
+            };
+            let request = || ModelRequest::new("openai/gpt-5.1-codex", Vec::new(), 10);
+
+            // The setup error itself: its fault, its stable code.
+            let connections = Arc::new(AtomicUsize::new(0));
+            let url = serve_scripted(vec![response()], Arc::clone(&connections));
+            let Err(error) = adapter_for(url)
+                .stream(request(), CancellationToken::new())
+                .await
+            else {
+                panic!("{status} must fail the call");
+            };
+            assert_eq!(error.fault, fault, "{status}");
+            assert_eq!(error.code(), Some(code), "{status}");
+            assert_eq!(fault.retries(), 0, "{status} is not retried by the matrix");
+            if fault == ProviderFault::Auth {
+                assert!(error.message.contains("cairn auth login"), "{error}");
+            }
+
+            // Through the loop: three responses are on offer, one is used.
+            let connections = Arc::new(AtomicUsize::new(0));
+            let url = serve_scripted(
+                vec![response(), response(), response()],
+                Arc::clone(&connections),
+            );
+            let events: Vec<StreamEvent> = tokio::time::timeout(
+                Duration::from_secs(30),
+                stream_with_retry(
+                    Arc::new(adapter_for(url)),
+                    request(),
+                    CancellationToken::new(),
+                    RetryBudget::new(),
+                    None,
+                )
+                .collect::<Vec<_>>(),
+            )
+            .await
+            .expect("a fatal status ends promptly");
+            assert_eq!(connections.load(Ordering::SeqCst), 1, "{status}: no retry");
+            assert_eq!(
+                events,
+                vec![StreamEvent::Finish {
+                    stop: StopReason::Error,
+                }],
+                "{status}"
+            );
+        }
+    }
 }

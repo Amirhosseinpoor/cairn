@@ -1340,6 +1340,11 @@ fn run_succeeds_in_all_three_formats() {
                     serde_json::from_str(&text).expect("one JSON object");
                 assert_eq!(value["text"], "Hi");
                 assert_eq!(value["usage"]["input"], 10);
+                assert_eq!(
+                    value["usage"]["estimated"], false,
+                    "provider numbers are real"
+                );
+                assert!(value.get("cost_usd").is_some(), "§7.7 carries cost_usd");
                 assert_eq!(value["stop"], "end_turn");
                 assert!(value["error"].is_null());
             }

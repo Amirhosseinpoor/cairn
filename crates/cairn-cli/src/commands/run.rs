@@ -11,8 +11,9 @@ use futures::StreamExt;
 
 use cairn_core::cancel::CancellationToken;
 use cairn_core::error::{codes, ExitStatus};
-use cairn_core::message::{Block, Message, Role, StopReason};
-use cairn_provider::{stream_with_retry, StreamEvent};
+use cairn_core::message::{Block, Message, Role, StopReason, Usage};
+use cairn_core::registry::Pricing;
+use cairn_provider::{cost_usd, estimate_request, estimate_tokens, stream_with_retry, StreamEvent};
 
 use crate::args::{ExportArgs, ResumeArgs, RunArgs, SessionsArgs, UpdateArgs};
 use crate::commands::{sessions, Startup};
@@ -181,6 +182,13 @@ async fn run_once(
     let mut request =
         cairn_provider::ModelRequest::new(live.model_id.clone(), vec![message], live.max_tokens);
     request.temperature = live.temperature;
+    // Without the output reserve `estimate_request` adds: this is the prompt
+    // alone, the fallback when the provider reports no input count.
+    let prompt_tokens = {
+        let mut probe = request.clone();
+        probe.max_tokens = 0;
+        estimate_request(&probe).input
+    };
     let stream = stream_with_retry(
         live.provider.clone(),
         request,
@@ -191,7 +199,7 @@ async fn run_once(
     let mut stream = Box::pin(stream);
 
     let mut text = String::new();
-    let mut usage: Option<serde_json::Value> = None;
+    let mut reported: Option<Usage> = None;
     let mut stop: Option<StopReason> = None;
     let mut failed = false;
     while let Some(event) = stream.next().await {
@@ -244,12 +252,7 @@ async fn run_once(
                 cache_read,
                 cache_write,
             } => {
-                usage = Some(serde_json::json!({
-                    "input": input,
-                    "output": output,
-                    "cache_read": cache_read,
-                    "cache_write": cache_write,
-                }));
+                reported = Some(Usage::reported(input, output, cache_read, cache_write));
                 if format == OutputFormat::StreamJson {
                     println!(
                         "{}",
@@ -285,18 +288,54 @@ async fn run_once(
     }
     let stop = stop.unwrap_or(StopReason::EndTurn);
     if format == OutputFormat::Json {
+        let report = usage_report(reported, prompt_tokens, &text, &live.pricing);
         println!(
             "{}",
             serde_json::json!({
                 "model": live.model_id,
                 "text": text,
-                "usage": usage,
+                "usage": {
+                    "input": report.usage.input,
+                    "output": report.usage.output,
+                    "cache_read": report.usage.cache_read,
+                    "cache_write": report.usage.cache_write,
+                    "estimated": report.usage.estimated,
+                },
+                "cost_usd": report.cost_usd,
                 "stop": stop_name(stop),
                 "error": null,
             })
         );
     }
     Ok(ExitStatus::Ok.code())
+}
+
+/// What a finished turn spent, and what that cost.
+struct UsageReport {
+    usage: Usage,
+    cost_usd: Option<f64>,
+}
+
+/// REQ-PROV-011: the provider's numbers override Cairn's estimate. A report
+/// that is missing, or says nothing was spent (T-FAULT-005: a proxy that
+/// answers `usage: 0`), is not believed — the §4.8 estimator stands in and
+/// the result is flagged `estimated`. `cost_usd` is `None`, never `0.0`, when
+/// the model has no price (REQ-PROV-012, T-PROV-012).
+fn usage_report(
+    reported: Option<Usage>,
+    prompt_tokens: u32,
+    output_text: &str,
+    pricing: &Pricing,
+) -> UsageReport {
+    let usage = match reported {
+        Some(real) if real.input > 0 || real.output > 0 => real,
+        _ => Usage {
+            output: estimate_tokens(output_text),
+            ..Usage::estimate(prompt_tokens)
+        },
+    };
+    let cost_usd = cost_usd(&usage, pricing);
+    UsageReport { usage, cost_usd }
 }
 
 /// A failed turn: the fault's stable code with exit 3 (T-CLI-010).
@@ -901,5 +940,53 @@ mod tests {
         };
         let err = read_prompt(&args).expect_err("no prompt fails");
         assert_eq!(err.exit, ExitStatus::Usage.code());
+    }
+
+    fn priced() -> Pricing {
+        Pricing {
+            input_per_mtok: Some(3.0),
+            output_per_mtok: Some(15.0),
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
+        }
+    }
+
+    /// REQ-PROV-011: real numbers win and are not flagged.
+    #[test]
+    fn reported_usage_overrides_the_estimate() {
+        let report = usage_report(
+            Some(Usage::reported(1_000_000, 100_000, 0, 0)),
+            7,
+            "ignored",
+            &priced(),
+        );
+        assert!(!report.usage.estimated);
+        assert_eq!(report.usage.input, 1_000_000);
+        assert!((report.cost_usd.expect("priced") - 4.5).abs() < 1e-9);
+    }
+
+    /// T-FAULT-005: a provider that answers `usage: 0` (or nothing) is not
+    /// believed — the estimator runs and the result says so.
+    #[test]
+    fn t_fault_005_zero_or_missing_usage_falls_back_to_the_estimator() {
+        for reported in [Some(Usage::reported(0, 0, 0, 0)), None] {
+            let report = usage_report(reported, 12, "abcdefgh", &priced());
+            assert!(report.usage.estimated, "{reported:?}");
+            assert_eq!(report.usage.input, 12);
+            assert_eq!(report.usage.output, 2, "ceil(8 chars / 4)");
+            assert!(report.cost_usd.is_some(), "an estimate still has a cost");
+        }
+    }
+
+    /// T-PROV-012: no price means `null`, never `0.0`.
+    #[test]
+    fn t_prov_012_an_unpriced_model_reports_null_cost() {
+        let report = usage_report(
+            Some(Usage::reported(10, 10, 0, 0)),
+            0,
+            "",
+            &Pricing::default(),
+        );
+        assert_eq!(report.cost_usd, None);
     }
 }
