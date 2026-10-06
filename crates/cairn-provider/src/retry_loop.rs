@@ -71,7 +71,14 @@ impl Loop {
         if self.cancel.is_cancelled() {
             return Err(fault);
         }
-        if fault.fault == ProviderFault::ContextLength && !self.compacted {
+        // §4.5: a 413 "triggers compaction once, then fatal" like a context
+        // overflow — but it has no matrix retry to fall back on without a
+        // compactor, so it is fatal right there.
+        let compactable = matches!(
+            fault.fault,
+            ProviderFault::ContextLength | ProviderFault::PayloadTooLarge
+        );
+        if compactable && !self.compacted {
             self.compacted = true;
             if let Some(compact) = self.compact.take() {
                 // T-PROV-037: one compaction, one immediate resend. It sits
@@ -82,7 +89,7 @@ impl Loop {
             }
             // No compactor: fall through to the matrix, which still allows
             // `ContextLength` its single retry.
-        } else if fault.fault == ProviderFault::ContextLength {
+        } else if compactable {
             // The compacted resend failed the same way: fatal (T-PROV-037's
             // "second 400").
             return Err(fault);
@@ -465,7 +472,7 @@ mod tests {
         );
     }
 
-    /// T-PROV-006: cancelling mid-backoff aborts the sleep — the assertion is
+    /// T-PROV-006, T-PROV-048: cancelling mid-backoff aborts the sleep — the assertion is
     /// on wall time, because a 30 s floor that slept through cancel would
     /// take this test with it.
     #[tokio::test(start_paused = true)]
@@ -924,5 +931,115 @@ mod tests {
                 "{status}"
             );
         }
+    }
+
+    /// §4.5's `Retries` column for every retryable HTTP/network row: one call
+    /// plus five retries, then the turn ends as an error with the row's own
+    /// code left for the report. T-PROV-041 (429 without `Retry-After`),
+    /// T-PROV-046 (DNS / connection refused), T-PROV-040 (408).
+    #[tokio::test(start_paused = true)]
+    async fn retryable_rows_spend_exactly_five_retries() {
+        for fault in [
+            ProviderFault::RateLimited,
+            ProviderFault::Unreachable,
+            ProviderFault::Timeout,
+        ] {
+            let provider = Arc::new(FakeProvider::new(
+                (0..6).map(|_| failed(fault)).collect::<Vec<_>>(),
+            ));
+            let (events, calls) =
+                collect(provider.clone(), request(), RetryBudget::new(), None).await;
+            assert_eq!(calls, 6, "{fault}: one call plus five retries");
+            assert_eq!(
+                events,
+                vec![StreamEvent::Finish {
+                    stop: StopReason::Error,
+                }]
+            );
+            assert_eq!(
+                provider.take_last_error().map(|error| error.fault),
+                Some(fault),
+                "{fault}: the terminal fault is the row's own"
+            );
+        }
+    }
+
+    /// T-PROV-036: against a server that only ever times out, the 180 s
+    /// budget ends the turn before the fifth retry would — and the fault the
+    /// caller reports is `E-PROV-TIMEOUT`, not a synthetic one.
+    #[tokio::test(start_paused = true)]
+    async fn t_prov_036_the_budget_ends_a_slow_server_with_its_timeout() {
+        let provider = Arc::new(FakeProvider::new(
+            (0..6)
+                .map(|_| failed(ProviderFault::Timeout))
+                .collect::<Vec<_>>(),
+        ));
+        // Smaller than the sum of five backoffs' upper bounds, so the budget
+        // — not the retry count — is what stops it.
+        let budget = RetryBudget::after(Duration::from_millis(600));
+        let (events, calls) = collect(provider.clone(), request(), budget, None).await;
+        assert!(
+            calls < 6,
+            "the budget stopped the loop first: {calls} calls"
+        );
+        assert_eq!(
+            events,
+            vec![StreamEvent::Finish {
+                stop: StopReason::Error,
+            }]
+        );
+        assert_eq!(
+            provider
+                .take_last_error()
+                .and_then(|error| error.code().map(str::to_string)),
+            Some("E-PROV-TIMEOUT".to_string())
+        );
+    }
+
+    /// T-PROV-042: a 413 compacts once and resends; the second 413 is fatal.
+    #[tokio::test]
+    async fn t_prov_042_payload_too_large_compacts_once_then_is_fatal() {
+        let provider = Arc::new(FakeProvider::new(vec![
+            failed(ProviderFault::PayloadTooLarge),
+            failed(ProviderFault::PayloadTooLarge),
+            failed(ProviderFault::PayloadTooLarge),
+        ]));
+        let compactions = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&compactions);
+        let compact: Compact = Box::new(move |request: &ModelRequest| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            request.clone()
+        });
+        let (events, calls) = collect(
+            provider.clone(),
+            request(),
+            RetryBudget::new(),
+            Some(compact),
+        )
+        .await;
+        assert_eq!(calls, 2, "the original call and one compacted resend");
+        assert_eq!(compactions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            events,
+            vec![StreamEvent::Finish {
+                stop: StopReason::Error,
+            }]
+        );
+        assert_eq!(
+            provider
+                .take_last_error()
+                .and_then(|e| e.code().map(str::to_string)),
+            Some("E-PROV-PAYLOAD".to_string())
+        );
+    }
+
+    /// Without a compactor a 413 has nothing to try: fatal on the spot.
+    #[tokio::test]
+    async fn payload_too_large_without_a_compactor_is_fatal_at_once() {
+        let provider = Arc::new(FakeProvider::new(vec![failed(
+            ProviderFault::PayloadTooLarge,
+        )]));
+        let (_, calls) = collect(provider, request(), RetryBudget::new(), None).await;
+        assert_eq!(calls, 1);
     }
 }

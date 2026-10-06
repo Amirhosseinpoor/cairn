@@ -21,7 +21,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **423 passed, 0 failed** |
+| Tests | `cargo test --workspace` | **427 passed, 0 failed** |
 | MSRV | `cargo +1.83.0 test --workspace` | 392 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
@@ -160,6 +160,7 @@ testable — including the command `cairn doctor` points people at.
 | User-defined models — REQ-PROV-013's `models.<id>` escape hatch now *runs*, not just validates: `provide::build` synthesises the registry row from the id's provider prefix and the user's `context_window` (§4.9 amended: the spec said the model validates but never said which provider or capabilities it gets) | done (M1) | REQ-PROV-013, T-PROV-013 |
 | `run --output json` usage honesty — the result now carries `usage.estimated` and `cost_usd` (§7.7): provider numbers override (REQ-PROV-011); a missing or all-zero report falls back to the §4.8 estimator flagged `estimated`; an unpriced model gives `cost_usd: null`, never `0` | done (M1) | T-FAULT-005, T-PROV-012, REQ-PROV-011/012 |
 | §4.5 fatal HTTP rows, live — 401/403/404/405 and a 400 content-filter each make exactly one connection, carry their stable code, and still end the turn with one `Finish { stop: Error }` | done (M1) | T-PROV-034, T-PROV-038, T-PROV-039, T-PROV-043, T-PROV-044 |
+| §4.5 retry rows end to end — 413 now compacts once and resends before going fatal (the loop only did that for a 400 context overflow, though the matrix says "compaction once, then fatal"); 408 / 429-without-header / unreachable each spend exactly five retries and keep their own code; a budget smaller than the backoffs ends a slow server's turn with `E-PROV-TIMEOUT` | done (M1) | T-PROV-036, T-PROV-040, T-PROV-041, T-PROV-042, T-PROV-046, T-PROV-048 |
 
 ### Decisions taken while landing the session store
 
