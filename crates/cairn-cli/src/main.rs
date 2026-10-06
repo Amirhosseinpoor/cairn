@@ -16,6 +16,7 @@ macro_rules! yell {
 
 mod activity;
 mod args;
+mod chat;
 mod commands;
 mod headless;
 mod log;

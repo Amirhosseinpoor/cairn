@@ -34,6 +34,9 @@ pub struct Wiring<'a> {
     pub quiet: bool,
     /// Checkpoints (§9.8): told about every write.
     pub observer: Option<Arc<dyn cairn_git::WriteObserver>>,
+    /// The interactive session answers approvals and questions itself.
+    pub approver: Option<Arc<dyn Approver>>,
+    pub questioner: Option<Arc<dyn Questioner>>,
 }
 
 fn env(key: &str) -> Option<String> {
@@ -133,7 +136,9 @@ pub fn build(wiring: &Wiring<'_>) -> Result<Arc<Executor>, Fail> {
         )
     })?;
 
-    let approver: Arc<dyn Approver> = if wiring.allow_ask {
+    let approver: Arc<dyn Approver> = if let Some(approver) = &wiring.approver {
+        Arc::clone(approver)
+    } else if wiring.allow_ask {
         Arc::new(StdinApprover)
     } else {
         Arc::new(DenyAll)
@@ -149,7 +154,9 @@ pub fn build(wiring: &Wiring<'_>) -> Result<Arc<Executor>, Fail> {
         redactor: Arc::new(crate::log::redactor_always(config)),
         syntax: Some(Arc::new(cairn_tools::ParseCheck)),
         observer: wiring.observer.clone(),
-        questioner: if wiring.allow_ask {
+        questioner: if wiring.questioner.is_some() {
+            wiring.questioner.clone()
+        } else if wiring.allow_ask {
             Some(Arc::new(StdinQuestioner) as Arc<dyn Questioner>)
         } else {
             None

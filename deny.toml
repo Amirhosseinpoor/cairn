@@ -65,6 +65,10 @@ version = 2
 # concern APIs Cairn never calls (`Remote::list`, `Blame::blame_buffer`);
 # the third (`Buf`) is fixed in 0.20.4. Revisit when MSRV moves.
 ignore = [
+    # `paste` (a proc-macro helper inside ratatui 0.29) is unmaintained. It runs
+    # only at compile time and has no known vulnerability; revisit when ratatui
+    # drops it.
+    { id = "RUSTSEC-2024-0436", reason = "compile-time proc-macro in ratatui; no runtime exposure" },
     { id = "RUSTSEC-2026-0183", reason = "git2 Remote::list is not used; fix needs git2 0.21 (MSRV)" },
     { id = "RUSTSEC-2026-0184", reason = "git2 blame_buffer is not used; fix needs git2 0.21 (MSRV)" },
 ]

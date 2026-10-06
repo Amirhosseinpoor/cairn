@@ -679,8 +679,11 @@ impl Executor {
                         crate::output::scrub(&mut input, &self.redactor);
                         crate::output::fit(&mut input, 8 * 1024);
                         json!({
+                            "tool": call.name,
                             "paths": resolved.iter().map(|(_, r)| r.display()).collect::<Vec<_>>(),
                             "mode": env.mode.as_str(),
+                            "rule": rule_id,
+                            "reason": reason,
                             "input": input,
                         })
                     },

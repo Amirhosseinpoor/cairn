@@ -115,6 +115,7 @@ pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<
         run_mode: startup.loaded.config.mode,
         allow_ask: args.allow_ask,
         max_iterations: args.max_iterations,
+        chat: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -184,12 +185,13 @@ fn read_stdin() -> Result<String, Fail> {
     })
 }
 
-/// `cairn chat` (and bare `cairn`) — the TUI is M3.
-pub fn chat(_cli: &crate::args::Cli, _startup: &Startup) -> Result<i32, Fail> {
-    Err(Fail::not_implemented(
-        "`cairn chat` (interactive session)",
-        "M3",
-    ))
+/// `cairn chat` (and bare `cairn`) — the interactive session.
+pub fn chat(cli: &crate::args::Cli, startup: &Startup) -> Result<i32, Fail> {
+    let args = match &cli.command {
+        Some(crate::args::Command::Chat(args)) => args,
+        _ => &crate::args::ChatArgs::default(),
+    };
+    crate::chat::run(cli, args, startup)
 }
 
 /// `cairn resume [SESSION_ID] [--list] [--json]` — restore a session (§8.7,
@@ -263,6 +265,7 @@ pub fn resume(cli: &crate::args::Cli, args: &ResumeArgs, startup: &Startup) -> R
                 .unwrap_or(startup.loaded.config.mode),
             allow_ask: false,
             max_iterations: None,
+            chat: None,
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -726,11 +729,17 @@ mod tests {
     }
 
     #[test]
-    fn stubs_name_their_milestone() {
+    fn chat_needs_a_terminal() {
         let tmp = tempfile::tempdir().unwrap();
         let startup = startup_in(tmp.path());
         let cli = crate::args::Cli::parse_from(["cairn"]);
-        assert!(chat(&cli, &startup).unwrap_err().message.contains("M3"));
+        let err = chat(&cli, &startup).unwrap_err();
+        assert!(
+            err.message.contains("interactive terminal"),
+            "{}",
+            err.message
+        );
+        assert_eq!(err.exit, 2);
     }
 
     #[test]

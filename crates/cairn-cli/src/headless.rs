@@ -65,6 +65,17 @@ pub struct Plan {
     pub allow_ask: bool,
     /// `--max-iterations`.
     pub max_iterations: Option<u32>,
+    /// Set by `cairn chat`: events, approvals and questions go to the
+    /// interface instead of stdout and stdin.
+    pub chat: Option<ChatLink>,
+}
+
+/// What the interactive session plugs into a turn.
+#[derive(Clone)]
+pub struct ChatLink {
+    pub events: Arc<dyn EventSink>,
+    pub approver: Arc<dyn cairn_tools::Approver>,
+    pub questioner: Arc<dyn cairn_tools::Questioner>,
 }
 
 /// `--input-fmt`: `text` is one user context message; `json`/`jsonl` is one
@@ -173,10 +184,16 @@ struct Emitter {
     session: String,
     seq: Mutex<u64>,
     enabled: bool,
+    /// The interface, when there is one: events go there, not to stdout.
+    forward: Option<Arc<dyn EventSink>>,
 }
 
 impl Emitter {
     fn publish(&self, data: EventData) {
+        if let Some(forward) = &self.forward {
+            forward.emit(data);
+            return;
+        }
         if !self.enabled {
             return;
         }
@@ -576,25 +593,62 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         let _ = tokio::signal::ctrl_c().await;
         watcher.cancel();
     });
+    let turn = run_turn(&plan, cancel).await?;
+    render(
+        &plan,
+        &turn.outcome,
+        turn.usage,
+        turn.cost_usd,
+        &turn.emitter,
+        &turn.session_id,
+        turn.turn_id,
+        turn.elapsed_ms,
+        turn.live_text,
+    );
+    finish(&plan, turn.outcome)
+}
 
+/// A finished turn, before anything is shown.
+pub struct Finished {
+    pub outcome: LoopOutcome,
+    pub usage: Usage,
+    pub cost_usd: Option<f64>,
+    pub elapsed_ms: u64,
+    pub session_id: String,
+    pub turn_id: u64,
+    emitter: Arc<Emitter>,
+    live_text: bool,
+}
+
+/// Run one turn over the session and make it durable; show nothing. The
+/// interactive session calls this once per prompt.
+///
+/// # Errors
+/// Whatever stops the turn before or while it is recorded.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one turn, in the order §8.1 draws it"
+)]
+pub async fn run_turn(plan: &Plan, cancel: CancellationToken) -> Result<Finished, Fail> {
     let _turn = crate::activity::begin(&plan.cache_home);
-    let (mut writer, state, created) = open_session(&plan)?;
+    let (mut writer, state, created) = open_session(plan)?;
     let session_id = state.header.session_id.clone();
     let turn_id = state.next_turn_id;
     let started = Instant::now();
-    let stream_json = plan.format == OutputFormat::StreamJson;
+    let stream_json = plan.format == OutputFormat::StreamJson || plan.chat.is_some();
 
     let emitter = Arc::new(Emitter {
         session: session_id.clone(),
         seq: Mutex::new(0),
         enabled: stream_json,
+        forward: plan.chat.as_ref().map(|c| Arc::clone(&c.events)),
     });
     let sink: Arc<dyn EventSink> = if stream_json {
         Arc::clone(&emitter) as Arc<dyn EventSink>
     } else {
         Arc::new(Progress { quiet: plan.quiet })
     };
-    let checkpoints = open_checkpoints(&plan, &session_id);
+    let checkpoints = open_checkpoints(plan, &session_id);
     let executor = crate::toolkit::build(&crate::toolkit::Wiring {
         observer: checkpoints
             .clone()
@@ -606,6 +660,8 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         events: sink,
         allow_ask: plan.allow_ask,
         quiet: plan.quiet,
+        approver: plan.chat.as_ref().map(|c| Arc::clone(&c.approver)),
+        questioner: plan.chat.as_ref().map(|c| Arc::clone(&c.questioner)),
     })?;
 
     let mut context: Vec<Message> = plan
@@ -648,8 +704,8 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
     let shell = std::env::var("SHELL").unwrap_or_default();
     let window = plan.live.provider.capabilities().max_context;
     let token_budget = (window > 0).then(|| cairn_context::budget::Budget::for_window(window));
-    let instructions = load_instructions(&plan, token_budget.as_ref());
-    let repo_map = repo_map_text(&plan, token_budget.as_ref()).await;
+    let instructions = load_instructions(plan, token_budget.as_ref());
+    let repo_map = repo_map_text(plan, token_budget.as_ref()).await;
     let system = system_prompt(&PromptVars {
         mode: plan.run_mode,
         workspace_root: &root,
@@ -679,7 +735,8 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
 
     // Text streams live only for a person watching; a pipe gets the committed
     // answer once, so a replayed attempt can never double up in a script.
-    let live_text = plan.format == OutputFormat::Text && std::io::stdout().is_terminal();
+    let live_text =
+        plan.chat.is_none() && plan.format == OutputFormat::Text && std::io::stdout().is_terminal();
     if stream_json {
         emitter.publish(if created {
             EventData::SessionCreated {
@@ -766,18 +823,16 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         )
         .map_err(flush_fail)?;
 
-    render(
-        &plan,
-        &outcome,
+    Ok(Finished {
+        outcome,
         usage,
         cost_usd,
-        &emitter,
-        &session_id,
-        turn_id,
         elapsed_ms,
+        session_id,
+        turn_id,
+        emitter,
         live_text,
-    );
-    finish(&plan, outcome)
+    })
 }
 
 /// Sum usage over every model call: the provider's numbers where it gave
@@ -936,6 +991,30 @@ fn render(
             });
         }
     }
+}
+
+/// What the interface shows when a turn ends: the failure, if there was one,
+/// then the closing `turn.ended`.
+#[must_use]
+pub fn end_events(plan: &Plan, turn: Finished) -> Vec<EventData> {
+    let status = turn_status_of(&turn.outcome.end);
+    let (turn_id, duration_ms, cost) = (turn.turn_id, turn.elapsed_ms, turn.cost_usd);
+    let mut events = Vec::new();
+    if let Err(fail) = finish(plan, turn.outcome) {
+        events.push(EventData::Error {
+            code: fail.code.to_string(),
+            message: fail.message,
+            recoverable: true,
+            hint: fail.hint.unwrap_or_default(),
+        });
+    }
+    events.push(EventData::TurnEnded {
+        turn_id,
+        status,
+        duration_ms,
+        cost_usd: cost.unwrap_or(0.0),
+    });
+    events
 }
 
 /// Turn the loop's ending into the process result (§8.3's exit column).

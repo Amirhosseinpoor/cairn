@@ -18,7 +18,8 @@ pub use load::{
     apply_kv, load, parse_bool_env, FlagOverrides, Kv, LayerInfo, LoadOptions, Loaded, ENV_KEYS,
 };
 pub use model::{
-    Config, LineEndingsSetting, LogLevel, ModelOverride, ProviderConfig, SCHEMA_VERSION,
+    Animation, Config, DiffLayout, EditorMode, LineEndingsSetting, LogLevel, ModelOverride,
+    ProviderConfig, ShowReasoning, SCHEMA_VERSION,
 };
 pub use paths::{discover_workspace, expand_tilde, is_abs_or_tilde, EnvLookup, Paths};
 pub use schema::{effective, json_schema, json_schema_pretty, EffectiveEntry, FlagSpec, FLAGS};

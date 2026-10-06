@@ -108,7 +108,7 @@ fn t_cli_001_exit_code_paths() {
 
     // 1 — unhandled / not-yet-implemented subsystem
     fx.cairn()
-        .args(["chat"])
+        .args(["mcp", "refresh"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("E-IMPL-STAGE"));
@@ -157,7 +157,7 @@ fn t_cli_001_exit_code_paths() {
 fn t_cli_002_code_line_in_normal_and_quiet() {
     let fx = Fixture::new();
     let cases: [(&[&str], &str); 5] = [
-        (&["chat"], "E-IMPL-STAGE"),
+        (&["mcp", "refresh"], "E-IMPL-STAGE"),
         (
             &["run", "-p", "hi", "--prompt-file", "x.txt"],
             "E-CLI-USAGE",
@@ -1191,8 +1191,7 @@ fn mcp_add_and_remove_roundtrip() {
 #[test]
 fn stubs_name_their_milestone() {
     let fx = Fixture::new();
-    let cases: [(&[&str], &str); 3] = [
-        (&["chat"], "M3"),
+    let cases: [(&[&str], &str); 2] = [
         (&["mcp", "inspect", "x"], "M4"),
         (&["mcp", "refresh"], "M4"),
     ];
@@ -1202,6 +1201,23 @@ fn stubs_name_their_milestone() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(stderr.contains("E-IMPL-STAGE"), "{args:?}: {stderr}");
         assert!(stderr.contains(milestone), "{args:?}: {stderr}");
+    }
+}
+
+/// `cairn chat` draws on a terminal; with none it says so and exits 2
+/// (usage) rather than writing escape codes into a pipe.
+#[test]
+fn chat_without_a_terminal_is_a_usage_error() {
+    let fx = Fixture::new();
+    for args in [vec!["chat"], vec![]] {
+        let out = fx.cairn().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("interactive terminal"),
+            "{args:?}: {stderr}"
+        );
+        assert!(stderr.contains("cairn run"), "{args:?}: {stderr}");
     }
 }
 
