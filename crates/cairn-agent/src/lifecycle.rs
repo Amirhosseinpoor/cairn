@@ -25,6 +25,8 @@ pub struct LoopConfig {
     pub max_tool_calls: u32,
     /// Consecutive denied calls that end the turn (`permissions.deny_ending_turn_after`, T-5).
     pub deny_ending_after: u32,
+    /// The token budget (§5.4); `None` sends whatever there is.
+    pub budget: Option<cairn_context::budget::Budget>,
 }
 
 impl Default for LoopConfig {
@@ -33,6 +35,7 @@ impl Default for LoopConfig {
             max_iterations: 40,
             max_tool_calls: 120,
             deny_ending_after: 3,
+            budget: None,
         }
     }
 }
@@ -58,6 +61,8 @@ pub enum LoopEnd {
     MaxTokens,
     /// T-13.
     ContentFilter,
+    /// The request cannot be made to fit (`E-CTX-COMPACT`).
+    ContextFull { message: String },
 }
 
 /// One committed iteration.
@@ -107,6 +112,24 @@ pub trait LoopHooks: Send {
     /// # Errors
     /// `E-SESS-FLUSH` when it cannot be; the loop stops with that error.
     fn commit(&mut self, iteration: &Iteration) -> Result<(), CairnError>;
+    /// History was compacted (§5.6). Persist the records before the next
+    /// request relies on them.
+    ///
+    /// # Errors
+    /// `E-SESS-FLUSH` when they cannot be made durable.
+    fn compacted(&mut self, _change: &Compacted<'_>) -> Result<(), CairnError> {
+        Ok(())
+    }
+}
+
+/// What a compaction changed, for [`LoopHooks::compacted`].
+#[derive(Debug)]
+pub struct Compacted<'a> {
+    pub before: &'a [Message],
+    pub after: &'a [Message],
+    pub records: &'a [cairn_context::compact::Record],
+    /// Rounds ran out and the oldest messages were dropped.
+    pub trimmed: bool,
 }
 
 fn tool_specs(executor: &Executor, mode: cairn_core::Mode) -> Vec<ToolSpec> {
@@ -132,6 +155,164 @@ fn tool_result_message(turn_id: u64, results: &[ToolResult]) -> Message {
         })
         .collect();
     Message::new(Role::Tool, blocks, turn_id)
+}
+
+/// Run one assistant message's tool calls. Calls whose arguments never
+/// parsed are answered here (§4.3); the rest go through the pipeline together
+/// so §6.6's policy applies.
+async fn run_calls(
+    executor: &Executor,
+    env: &CallEnv,
+    cancel: &CancellationToken,
+    calls: &[(String, String, serde_json::Value, Option<String>)],
+) -> Vec<ToolResult> {
+    let mut dispatch = Vec::new();
+    let mut slots: Vec<Option<ToolResult>> = Vec::with_capacity(calls.len());
+    for (call_id, name, input, parse_error) in calls {
+        if let Some(why) = parse_error {
+            let error = ToolError::new(
+                codes::TOOL_BADJSON,
+                format!("the arguments to `{name}` are not valid JSON: {why}"),
+            )
+            .recovery("Send the call again with well-formed JSON arguments.");
+            slots.push(Some(ToolResult::rejected(call_id, name, &error)));
+        } else {
+            dispatch.push(ToolCall {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+            });
+            slots.push(None);
+        }
+    }
+    let (ran, _burst) = executor.run_batch(dispatch, env, cancel).await;
+    let mut ran = ran.into_iter();
+    slots
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(|| ran.next().expect("one result per dispatched call")))
+        .collect()
+}
+
+/// Whether a request fits, after compacting if it did not.
+enum Fit {
+    Ok,
+    Cancelled,
+    Full(String),
+}
+
+/// Distinct turns since the last summary, for C-4.
+fn turns_since_summary(history: &[Message]) -> u32 {
+    let start = history
+        .iter()
+        .rposition(cairn_context::compact::is_summary)
+        .map_or(0, |i| i + 1);
+    let turns: std::collections::BTreeSet<u64> =
+        history[start..].iter().map(|m| m.turn_id).collect();
+    u32::try_from(turns.len()).unwrap_or(u32::MAX)
+}
+
+/// §5.4/§5.6: make sure `request` fits its window, compacting when a trigger
+/// fires (`forced` is C-3's provider-reported overflow). REQ-CTX-010: a
+/// request that still does not fit is not sent.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one parameter per collaborator the §3.3 diagram names"
+)]
+async fn make_room(
+    provider: &Arc<dyn Provider>,
+    request: &mut ModelRequest,
+    budget: &cairn_context::budget::Budget,
+    retry: &RetryBudget,
+    env: &CallEnv,
+    cancel: &CancellationToken,
+    hooks: &mut dyn LoopHooks,
+    forced: Option<cairn_context::compact::Trigger>,
+    state: &mut cairn_context::compact::State,
+) -> Result<Fit, CairnError> {
+    use cairn_context::budget::{history_tokens, verify_budget};
+    use cairn_context::compact::{automatic_trigger, Trigger};
+
+    let start = usize::from(
+        request
+            .messages
+            .first()
+            .is_some_and(|m| m.role == Role::System),
+    );
+    let fixed = request.messages[..start]
+        .iter()
+        .map(cairn_context::budget::message_tokens)
+        .sum::<u32>()
+        + cairn_core::tokens::estimate_tokens(
+            &serde_json::to_string(&request.tools).unwrap_or_default(),
+        );
+    let total = |request: &ModelRequest| fixed + history_tokens(&request.messages[start..]);
+    state.turns_since = turns_since_summary(&request.messages[start..]);
+    let trigger = forced.or_else(|| {
+        let tokens = total(request);
+        if verify_budget(tokens, budget).is_err() {
+            Some(Trigger::Reserve)
+        } else {
+            automatic_trigger(tokens, budget, state)
+        }
+    });
+    let Some(trigger) = trigger else {
+        return Ok(Fit::Ok);
+    };
+    let before: Vec<Message> = request.messages[start..].to_vec();
+    let job = crate::compaction::Job {
+        provider: Arc::clone(provider),
+        model: &request.model,
+        retry,
+        budget,
+        current_turn: env.turn_id,
+        trigger,
+        first_id: 1 + u32::try_from(
+            before
+                .iter()
+                .filter(|m| cairn_context::compact::is_summary(m))
+                .count(),
+        )
+        .unwrap_or(0),
+        fixed_tokens: fixed,
+    };
+    let still_fits = |request: &ModelRequest| verify_budget(total(request), budget).is_ok();
+    match crate::compaction::compact(&job, &before, None, cancel).await {
+        crate::compaction::Outcome::Cancelled => Ok(Fit::Cancelled),
+        crate::compaction::Outcome::Nothing => Ok(if still_fits(request) {
+            Fit::Ok
+        } else {
+            Fit::Full("there is nothing left to compact and the request is still too large".into())
+        }),
+        crate::compaction::Outcome::Failed { code, message } => Ok(if still_fits(request) {
+            Fit::Ok
+        } else {
+            Fit::Full(format!("{code}: {message}"))
+        }),
+        crate::compaction::Outcome::Compacted {
+            messages,
+            records,
+            trimmed,
+        } => {
+            let mut rebuilt: Vec<Message> = request.messages[..start].to_vec();
+            rebuilt.extend(messages.iter().cloned());
+            request.messages = rebuilt;
+            hooks.compacted(&Compacted {
+                before: &before,
+                after: &messages,
+                records: &records,
+                trimmed,
+            })?;
+            state.turns_since = 0;
+            state.last_reduction = records
+                .last()
+                .map(cairn_context::compact::Record::reduction);
+            Ok(if still_fits(request) {
+                Fit::Ok
+            } else {
+                Fit::Full("the request is too large even after compaction".into())
+            })
+        }
+    }
 }
 
 /// Run the turn described by `request` (whose `messages` hold the system
@@ -165,6 +346,8 @@ pub async fn run_loop(
         discarded_attempts: 0,
     };
     let mut denied_in_a_row = 0_u32;
+    let mut compaction_state = cairn_context::compact::State::default();
+    let mut overflow_retried = false;
 
     loop {
         // §7.5: evaluated at every increment of the iteration counter.
@@ -175,6 +358,31 @@ pub async fn run_loop(
                 actual: u64::from(outcome.model_calls) + 1,
             };
             return Ok(outcome);
+        }
+        if let Some(window) = config.budget {
+            match make_room(
+                &provider,
+                &mut request,
+                &window,
+                budget,
+                env,
+                cancel,
+                hooks,
+                None,
+                &mut compaction_state,
+            )
+            .await?
+            {
+                Fit::Ok => {}
+                Fit::Cancelled => {
+                    outcome.end = LoopEnd::Cancelled;
+                    return Ok(outcome);
+                }
+                Fit::Full(message) => {
+                    outcome.end = LoopEnd::ContextFull { message };
+                    return Ok(outcome);
+                }
+            }
         }
         outcome.model_calls += 1;
 
@@ -195,6 +403,32 @@ pub async fn run_loop(
                 return Ok(outcome);
             }
             TurnEnd::Failed => {
+                // C-3: the provider says the context was too long — compact
+                // once and try again.
+                let overflow = turn
+                    .fault
+                    .as_ref()
+                    .and_then(cairn_provider::ProviderError::code)
+                    == Some(cairn_core::error::codes::PROV_CONTEXT);
+                if let (true, false, Some(window)) = (overflow, overflow_retried, config.budget) {
+                    overflow_retried = true;
+                    let fit = make_room(
+                        &provider,
+                        &mut request,
+                        &window,
+                        budget,
+                        env,
+                        cancel,
+                        hooks,
+                        Some(cairn_context::compact::Trigger::ProviderError),
+                        &mut compaction_state,
+                    )
+                    .await?;
+                    if matches!(fit, Fit::Ok) {
+                        outcome.model_calls -= 1;
+                        continue;
+                    }
+                }
                 outcome.end = LoopEnd::ProviderFailed;
                 outcome.fault = turn.fault;
                 return Ok(outcome);
@@ -255,33 +489,7 @@ pub async fn run_loop(
         }
         outcome.tool_calls = would_be;
 
-        // Calls whose arguments never parsed are answered here (§4.3); the
-        // rest go through the pipeline together so §6.6's policy applies.
-        let mut dispatch = Vec::new();
-        let mut slots: Vec<Option<ToolResult>> = Vec::with_capacity(calls.len());
-        for (call_id, name, input, parse_error) in &calls {
-            if let Some(why) = parse_error {
-                let error = ToolError::new(
-                    codes::TOOL_BADJSON,
-                    format!("the arguments to `{name}` are not valid JSON: {why}"),
-                )
-                .recovery("Send the call again with well-formed JSON arguments.");
-                slots.push(Some(ToolResult::rejected(call_id, name, &error)));
-            } else {
-                dispatch.push(ToolCall {
-                    call_id: call_id.clone(),
-                    name: name.clone(),
-                    input: input.clone(),
-                });
-                slots.push(None);
-            }
-        }
-        let (ran, _burst) = executor.run_batch(dispatch, env, cancel).await;
-        let mut ran = ran.into_iter();
-        let results: Vec<ToolResult> = slots
-            .into_iter()
-            .map(|slot| slot.unwrap_or_else(|| ran.next().expect("one result per dispatched call")))
-            .collect();
+        let results = run_calls(executor, env, cancel, &calls).await;
 
         let tool_message = tool_result_message(env.turn_id, &results);
         let iteration = Iteration {

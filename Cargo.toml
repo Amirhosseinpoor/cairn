@@ -71,6 +71,7 @@ cairn-testkit = { path = "crates/cairn-testkit", version = "0.1.0" }
 cairn-sse = { path = "crates/cairn-sse", version = "0.1.0" }
 cairn-perm = { path = "crates/cairn-perm", version = "0.1.0" }
 cairn-git = { path = "crates/cairn-git", version = "0.1.0" }
+cairn-context = { path = "crates/cairn-context", version = "0.1.0" }
 cairn-tools = { path = "crates/cairn-tools", version = "0.1.0" }
 cairn-search = { path = "crates/cairn-search", version = "0.1.0" }
 cairn-parse = { path = "crates/cairn-parse", version = "0.1.0" }

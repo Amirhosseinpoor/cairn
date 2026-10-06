@@ -141,6 +141,25 @@ impl SessionWriter {
         })
     }
 
+    /// A compaction (§5.6): the summary and what it replaced, durable before
+    /// the next request relies on it.
+    ///
+    /// # Errors
+    /// `E-SESS-FLUSH` when the record cannot be written and synced.
+    pub fn compaction(&mut self, record: &cairn_context::compact::Record) -> Result<()> {
+        let body = serde_json::json!({ "action": "performed", "compaction": record });
+        self.append(|seq| Record::new(kind::COMPACTION, Some(seq), body))
+    }
+
+    /// `/undo compaction`: the most recent compaction no longer applies.
+    ///
+    /// # Errors
+    /// `E-SESS-FLUSH` when the record cannot be written and synced.
+    pub fn compaction_undone(&mut self, id: u32) -> Result<()> {
+        let body = serde_json::json!({ "action": "undone", "id": id });
+        self.append(|seq| Record::new(kind::COMPACTION, Some(seq), body))
+    }
+
     /// # Errors
     /// `E-SESS-FLUSH` when the record cannot be written and synced.
     pub fn error(&mut self, code: &str, message: &str) -> Result<()> {
@@ -236,6 +255,10 @@ pub struct ResumeState {
     /// Sum of every `turn_ended.cost_usd` that had a price.
     pub cost_usd: f64,
     pub dangling: Option<Dangling>,
+    /// Compactions in force, oldest first (§5.6).
+    pub compactions: Vec<cairn_context::compact::Record>,
+    /// The messages as they were written, before any compaction.
+    pub original_messages: Vec<Message>,
 }
 
 /// Fold a session's records into [`ResumeState`].
@@ -248,6 +271,7 @@ pub fn resume_state(file: &SessionFile) -> ResumeState {
     let mut abandoned: BTreeSet<u64> = BTreeSet::new();
     let mut messages: Vec<(u64, Message)> = Vec::new();
     let mut seen_ids = BTreeSet::new();
+    let mut compactions: Vec<cairn_context::compact::Record> = Vec::new();
 
     for record in file.records() {
         let turn_id = record.field("turn_id").and_then(serde_json::Value::as_u64);
@@ -289,6 +313,20 @@ pub fn resume_state(file: &SessionFile) -> ResumeState {
                     counts.1 += 1;
                 }
             }
+            kind::COMPACTION => match record.field("action").and_then(serde_json::Value::as_str) {
+                Some("performed") => {
+                    if let Some(parsed) = record
+                        .field("compaction")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    {
+                        compactions.push(parsed);
+                    }
+                }
+                Some("undone") => {
+                    compactions.pop();
+                }
+                _ => {}
+            },
             kind::MODE_CHANGED => {
                 if let Some(to) = record.field("to").and_then(serde_json::Value::as_str) {
                     mode = to.to_string();
@@ -308,15 +346,18 @@ pub fn resume_state(file: &SessionFile) -> ResumeState {
                     tool_results_committed: *tool_results_committed,
                 },
             );
+    let original_messages: Vec<Message> = messages
+        .into_iter()
+        .filter(|(turn, _)| !abandoned.contains(turn))
+        .map(|(_, message)| message)
+        .collect();
     ResumeState {
         header: file.header.clone(),
         mode,
         cwd: file.header.workspace.clone(),
-        messages: messages
-            .into_iter()
-            .filter(|(turn, _)| !abandoned.contains(turn))
-            .map(|(_, message)| message)
-            .collect(),
+        messages: cairn_context::compact::replay(&original_messages, &compactions),
+        compactions,
+        original_messages,
         next_turn_id: max_turn + 1,
         cost_usd,
         dangling,

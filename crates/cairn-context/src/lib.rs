@@ -1,5 +1,14 @@
-//! `cairn-context` — Context engine: repo map, tool feedback, compaction (SPEC 5)
+//! `cairn-context` — what goes into a request, and what is left out when it
+//! does not fit (SPEC §5).
 //!
-//! Delivered in milestone **M3** (SPEC §15.4). This crate is a compile-checked
-//! placeholder so workspace dependency direction (REQ-ARCH-003) is enforced from
-//! day one; the module boundary and public API land with the milestone.
+//! * [`budget`] — the token budget table, packing and refusal.
+//! * [`instructions`] — `AGENTS.md` discovery and merging.
+//! * [`compact`] — when and how history is summarised.
+//!
+//! The crate does arithmetic and text; it calls no model and touches no
+//! network. Counting tokens, asking a model to summarise and persisting the
+//! result are the agent's job.
+
+pub mod budget;
+pub mod compact;
+pub mod instructions;

@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 cairn-core.workspace = true
+cairn-context.workspace = true
 cairn-provider.workspace = true
 cairn-tools.workspace = true
 cairn-session.workspace = true

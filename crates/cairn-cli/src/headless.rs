@@ -230,7 +230,10 @@ impl EventSink for Progress {
 fn turn_status_of(end: &LoopEnd) -> TurnStatus {
     match end {
         LoopEnd::Completed => TurnStatus::Ok,
-        LoopEnd::ProviderFailed | LoopEnd::MaxTokens | LoopEnd::ContentFilter => TurnStatus::Error,
+        LoopEnd::ProviderFailed
+        | LoopEnd::MaxTokens
+        | LoopEnd::ContentFilter
+        | LoopEnd::ContextFull { .. } => TurnStatus::Error,
         LoopEnd::Cancelled => TurnStatus::Cancelled,
         LoopEnd::Guardrail { .. } => TurnStatus::Guardrail,
         LoopEnd::Denied { .. } => TurnStatus::Denied,
@@ -240,7 +243,10 @@ fn turn_status_of(end: &LoopEnd) -> TurnStatus {
 fn status_name(end: &LoopEnd) -> &'static str {
     match end {
         LoopEnd::Completed => status::OK,
-        LoopEnd::ProviderFailed | LoopEnd::MaxTokens | LoopEnd::ContentFilter => status::ERROR,
+        LoopEnd::ProviderFailed
+        | LoopEnd::MaxTokens
+        | LoopEnd::ContentFilter
+        | LoopEnd::ContextFull { .. } => status::ERROR,
         LoopEnd::Cancelled => status::CANCELLED,
         LoopEnd::Guardrail { .. } => status::GUARDRAIL,
         LoopEnd::Denied { .. } => status::DENIED,
@@ -252,7 +258,7 @@ fn exit_code(end: &LoopEnd) -> i32 {
     match end {
         LoopEnd::Completed => ExitStatus::Ok.code(),
         LoopEnd::ProviderFailed | LoopEnd::ContentFilter => ExitStatus::Provider.code(),
-        LoopEnd::MaxTokens => ExitStatus::Generic.code(),
+        LoopEnd::MaxTokens | LoopEnd::ContextFull { .. } => ExitStatus::Generic.code(),
         LoopEnd::Cancelled => ExitStatus::Cancelled.code(),
         LoopEnd::Guardrail { .. } => ExitStatus::Guardrail.code(),
         LoopEnd::Denied { .. } => ExitStatus::Permission.code(),
@@ -279,9 +285,39 @@ struct Persist<'a> {
     stream_json: bool,
     turn_id: u64,
     pricing: cairn_core::registry::Pricing,
+    quiet: bool,
 }
 
 impl LoopHooks for Persist<'_> {
+    fn compacted(
+        &mut self,
+        change: &cairn_agent::lifecycle::Compacted<'_>,
+    ) -> Result<(), CairnError> {
+        // Durable before the next request relies on it.
+        for record in change.records {
+            self.writer.compaction(record)?;
+        }
+        let (before, after, dropped, summarised, summary_tokens) =
+            cairn_agent::compaction::event_numbers(change.before, change.after, change.records);
+        self.emitter.publish(EventData::CompactionPerformed {
+            before_tokens: before,
+            after_tokens: after,
+            messages_dropped: dropped,
+            messages_summarized: summarised,
+            summary_tokens,
+        });
+        if !self.quiet {
+            crate::output::info_line(&cairn_agent::compaction::notice(before, after));
+            if change.trimmed {
+                crate::output::warn_line(
+                    codes::CTX_COMPACT,
+                    "summaries were not enough; the oldest messages were dropped",
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn on_stream(&mut self, event: &StreamEvent) {
         match event {
             StreamEvent::TextDelta { text } if self.live_text => {
@@ -425,6 +461,45 @@ fn record_faults(
     Ok(())
 }
 
+/// §5.7: the merged `AGENTS.md` text, cut to fit the system-prompt share of
+/// the window (`W-CTX-SYSPROMPT`), with `W-CTX-ALIAS` warnings shown.
+fn load_instructions(
+    plan: &Plan,
+    budget: Option<&cairn_context::budget::Budget>,
+) -> Option<String> {
+    let redactor = crate::log::redactor_always(&plan.config);
+    let active = [plan.workspace.clone()];
+    let loaded = cairn_context::instructions::load(
+        &cairn_context::instructions::Locations {
+            workspace: &plan.workspace,
+            config_home: Some(&plan.paths.config_home),
+            active_dirs: &active,
+        },
+        &redactor,
+    );
+    if !plan.quiet {
+        for warning in &loaded.warnings {
+            crate::output::warn_line(warning.code, &warning.message);
+        }
+    }
+    if loaded.text.trim().is_empty() {
+        return None;
+    }
+    let Some(budget) = budget else {
+        return Some(loaded.text);
+    };
+    // The prompt around the instructions takes some of the system share.
+    let room = budget.system.saturating_sub(1_500);
+    let (text, cut) = cairn_context::budget::truncate_instructions(&loaded.text, room);
+    if cut && !plan.quiet {
+        crate::output::warn_line(
+            codes::CTX_SYSPROMPT,
+            "project instructions were cut to fit the system prompt budget",
+        );
+    }
+    Some(text)
+}
+
 /// Run one headless turn; returns the process exit code (0 / 7) or the
 /// failure to report (3 provider, 4 guardrail, 6 denied, 9 session, 13
 /// flush, ...).
@@ -507,6 +582,9 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
     let root = plan.workspace.to_string_lossy();
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let shell = std::env::var("SHELL").unwrap_or_default();
+    let window = plan.live.provider.capabilities().max_context;
+    let token_budget = (window > 0).then(|| cairn_context::budget::Budget::for_window(window));
+    let instructions = load_instructions(&plan, token_budget.as_ref());
     let system = system_prompt(&PromptVars {
         mode: plan.run_mode,
         workspace_root: &root,
@@ -516,7 +594,7 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         date_utc: &date,
         model_id: &plan.live.model_id,
         tools: &tools,
-        instructions: None,
+        instructions: instructions.as_deref(),
     });
     let mut messages = vec![Message::new(
         Role::System,
@@ -567,6 +645,7 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
         max_iterations: plan.config.auto.max_iterations,
         max_tool_calls: plan.config.auto.max_tool_calls,
         deny_ending_after: plan.config.permissions.deny_ending_turn_after,
+        budget: token_budget,
     };
     let config = LoopConfig {
         max_iterations: plan.max_iterations.unwrap_or(defaults.max_iterations),
@@ -589,6 +668,7 @@ pub async fn execute(plan: Plan, cancel: CancellationToken) -> Result<i32, Fail>
             stream_json,
             turn_id,
             pricing: plan.live.pricing,
+            quiet: plan.quiet,
         };
         run_loop(
             Arc::clone(&plan.live.provider),
@@ -827,6 +907,12 @@ fn finish(plan: &Plan, outcome: LoopOutcome) -> Result<i32, Fail> {
             ExitStatus::Generic,
             "the model ran out of output tokens before finishing",
             Some("raise `max_output` for this model, or split the task".to_string()),
+        )),
+        LoopEnd::ContextFull { message } => Err(Fail::new(
+            codes::CTX_COMPACT,
+            ExitStatus::Generic,
+            format!("the conversation no longer fits the model's window: {message}"),
+            Some("start a new session, or use a model with a larger context window".to_string()),
         )),
         LoopEnd::ContentFilter => Err(Fail::new(
             codes::PROV_FILTER,

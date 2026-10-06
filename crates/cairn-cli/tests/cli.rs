@@ -2974,3 +2974,44 @@ fn t_tool_001_doctor_tools_lists_the_registered_tools() {
         .expect("detail")
         .contains("--tools lists them"));
 }
+
+/// §5.7 end to end: `AGENTS.md` in the workspace and in the user's config
+/// directory reach the system prompt, merged and attributed, with secrets
+/// redacted (T-CTX-024, T-SEC-013).
+#[test]
+fn agents_md_files_are_merged_into_the_system_prompt() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    std::fs::write(
+        fx.ws.join("AGENTS.md"),
+        "## Style\nUse tabs.\n\n## Secrets\nThe key is sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD.\n",
+    )
+    .expect("agents");
+    std::fs::create_dir_all(fx.ws.join(".cairn")).expect("dir");
+    std::fs::write(
+        fx.ws.join(".cairn/AGENTS.md"),
+        "## Style\nTeam: prefer small commits.\n",
+    )
+    .expect("project agents");
+    let (out, _) = run_json(&fx, &["-p", "hi"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let sent: serde_json::Value =
+        serde_json::from_slice(&bodies.lock().expect("bodies")[0]).expect("body");
+    let system = sent["messages"][0]["content"].as_str().expect("system");
+    assert!(
+        system.contains("# Project instructions (authoritative"),
+        "{system}"
+    );
+    assert!(
+        system.contains("<!-- source: AGENTS.md -->\nUse tabs."),
+        "{system}"
+    );
+    assert!(
+        system.contains("<!-- source: .cairn/AGENTS.md -->\nTeam: prefer small commits."),
+        "{system}"
+    );
+    assert!(!system.contains("sk-abcdefghijkl"), "secrets are redacted");
+    assert!(system.contains("***REDACTED***"));
+}

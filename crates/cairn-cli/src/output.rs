@@ -145,6 +145,11 @@ pub fn warn_line(code: &str, message: &str) {
     eprintln!("warning: {code}: {message}");
 }
 
+/// A progress notice on stderr (never on stdout, which carries the answer).
+pub fn info_line(message: &str) {
+    eprintln!("{message}");
+}
+
 /// `cairn doctor` row status (SPEC §12.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]

@@ -17,6 +17,7 @@ pub mod mode;
 pub mod redact;
 pub mod registry;
 pub mod shutdown;
+pub mod tokens;
 
 pub use cancel::CancellationToken;
 pub use error::{is_valid_code, CairnError, ExitStatus};

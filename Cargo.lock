@@ -216,6 +216,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 name = "cairn-agent"
 version = "0.1.0"
 dependencies = [
+ "cairn-context",
  "cairn-core",
  "cairn-perm",
  "cairn-provider",
@@ -236,6 +237,7 @@ dependencies = [
  "assert_cmd",
  "cairn-agent",
  "cairn-config",
+ "cairn-context",
  "cairn-core",
  "cairn-git",
  "cairn-perm",
@@ -281,6 +283,13 @@ name = "cairn-context"
 version = "0.1.0"
 dependencies = [
  "cairn-core",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

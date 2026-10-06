@@ -6,6 +6,7 @@
 //! §8.7 ([`transcript`]). Tool execution, modes and guardrails arrive in
 //! M2–M4 on top of the same turn runner.
 
+pub mod compaction;
 pub mod lifecycle;
 pub mod prompt;
 pub mod transcript;
