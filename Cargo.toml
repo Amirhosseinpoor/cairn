@@ -33,9 +33,12 @@ clap_complete = "4.5"
 toml_edit = "0.22"
 jsonschema = { version = "0.46", default-features = false }
 ignore = "0.4"
-grep-searcher = "0.1"
-grep-regex = "0.1"
-grep-matcher = "0.1"
+# Pinned: the newest grep-* releases declare `edition = "2024"`, which Cargo 1.83
+# (D-01 MSRV) cannot parse, and they publish no `rust-version` for the resolver
+# to avoid them. Lift these pins when the MSRV moves past 1.85.
+grep-searcher = "=0.1.14"
+grep-regex = "=0.1.13"
+grep-matcher = "=0.1.7"
 # --- http (D-04: reqwest 0.12, rustls with bundled Mozilla roots, no openssl) ---
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "stream", "gzip", "http2"] }
 # --- logging (§12.1) ---

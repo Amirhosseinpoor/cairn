@@ -344,6 +344,7 @@ own: a section that claims completeness, and does not have it.
   verified by CI runners, not by `cargo check --target` on Linux. New code in this
   area stays portable by construction (no platform APIs, loopback and `temp_dir` in
   tests) and every push is CI-verified before the next chunk lands.
+- **`grep-*` crates are pinned** (`grep-matcher =0.1.7`, `grep-regex =0.1.13`, `grep-searcher =0.1.14`): the newest releases declare `edition = "2024"`, which Cargo 1.83 cannot parse, and they publish no `rust-version` for the MSRV-aware resolver to avoid. The `msrv` CI job caught it on the first push that used them. Lift the pins when the MSRV moves past 1.85.
 - **`cargo +1.83.0` prints one line** — `warning: ignoring 'resolver' config table without
   '-Zmsrv-policy'` — because cargo 1.83 predates the MSRV-aware resolver that `.cargo/config.toml`
   configures. It is informational; the lockfile it reads was produced by a newer cargo.
