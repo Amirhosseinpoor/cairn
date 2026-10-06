@@ -307,6 +307,17 @@ own: a section that claims completeness, and does not have it.
     new turn). The bad-block counting and session-scoped disable (`E-PROV-FALLBACK`) stay with
     the turn loop, which owns the session — `cairn-provider::fallback` classifies, the loop
     counts. Covered by the mock cassettes and live loopback proofs.
+23. **REQ-PROV-013 said an unlisted model validates when `models.<id>.context_window` is set, and
+    never said which provider or capabilities it then gets; §7.7 gave `--input` one line and the
+    JSON document no `session_id`, `usage.estimated` or failure form** → §4.9: the provider is the
+    id's `<provider>/` prefix (it must name a registry provider), `max_output` defaults to
+    `min(context_window, 4096)`, native tool calling only for the hosted kinds, pricing `null`.
+    §7.7: `--input-fmt text|json` formats, `--session` semantics (unknown id = exit 9), every run
+    persisted, a dangling turn closed first (`r` under `session.auto_recover`, else `k`), and the
+    JSON document is also printed on failure. Implemented as `provide::user_model_entry` and
+    `cairn-cli::headless`. Also found while landing it: §4.5 says a 413 "triggers compaction once,
+    then fatal", but the retry loop compacted only a 400 context overflow — fixed, with
+    T-PROV-042.
 
 ## Known limitations of the M0 delivery
 
