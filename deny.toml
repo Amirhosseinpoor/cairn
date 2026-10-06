@@ -57,4 +57,11 @@ allow-git = []
 
 [advisories]
 version = 2
-ignore = []
+# git2 >= 0.21 needs a newer compiler than MSRV 1.83, and 0.20.4 is the last
+# release that builds on it. These two advisories are fixed only in 0.21 and
+# concern APIs Cairn never calls (`Remote::list`, `Blame::blame_buffer`);
+# the third (`Buf`) is fixed in 0.20.4. Revisit when MSRV moves.
+ignore = [
+    { id = "RUSTSEC-2026-0183", reason = "git2 Remote::list is not used; fix needs git2 0.21 (MSRV)" },
+    { id = "RUSTSEC-2026-0184", reason = "git2 blame_buffer is not used; fix needs git2 0.21 (MSRV)" },
+]

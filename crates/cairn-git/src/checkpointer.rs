@@ -100,6 +100,15 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// `path` without a Windows verbatim prefix.
+fn plain(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
 fn sha(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -113,10 +122,12 @@ impl Checkpointer {
     /// that is not a usable git repository uses the copy backend.
     #[must_use]
     pub fn open(workspace: &Path, session: &str, limits: Limits) -> Self {
+        let given = workspace.to_path_buf();
         let workspace = workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());
-        let git = Git::discover(&workspace);
+        // libgit2 does not understand Windows' `\\?\` verbatim paths.
+        let git = Git::discover(&plain(&workspace)).or_else(|| Git::discover(&plain(&given)));
         let (root, store) = match &git {
             Some(g) => (
                 g.workdir

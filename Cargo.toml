@@ -33,7 +33,7 @@ clap_complete = "4.5"
 toml_edit = "0.22"
 jsonschema = { version = "0.46", default-features = false }
 similar = "2"
-git2 = { version = "0.19", default-features = false }
+git2 = { version = "0.20.4", default-features = false }
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
 tree-sitter-python = "0.23"
