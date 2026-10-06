@@ -10,10 +10,11 @@
 //!   block wins, bad JSON classifies rather than throws;
 //! * [`format_tool_result`] — the `<tool_result>` injection template.
 //!
-//! What is *not* here: the per-turn bad-block counting and the
-//! session-scoped disable (`E-PROV-FALLBACK`) — that state belongs to the
-//! turn loop, which owns the session. This module classifies; the loop
-//! counts.
+//! * [`FallbackBudget`] — REQ-PROV-008's two-repairs-per-turn counter and the
+//!   session-scoped disable (`E-PROV-FALLBACK`). It is plain state with no
+//!   clock or I/O; the turn loop owns one per session and feeds it every
+//!   classification, so this module classifies and the loop decides what to
+//!   do with the verdict.
 
 use std::sync::OnceLock;
 
@@ -122,6 +123,66 @@ pub fn format_tool_result(name: &str, call_id: &str, output: &str) -> String {
     format!("<tool_result name=\"{name}\" call_id=\"{call_id}\">\n{output}\n</tool_result>")
 }
 
+/// What the turn loop does after one classified model message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallbackVerdict {
+    /// A good call, or no call at all: carry on.
+    Proceed,
+    /// A bad block within budget: answer with an `E-TOOL-BADJSON` result and
+    /// let the model repair it.
+    Repair,
+    /// The budget is spent: report `E-PROV-FALLBACK` and stop using the
+    /// prompt-based format for the rest of the session.
+    Disabled,
+}
+
+/// REQ-PROV-008's budget: at most [`Self::MAX_REPAIRS`] bad blocks are
+/// repaired per turn; the next one disables the fallback for the session.
+/// A good block does not refund a repair, and [`Self::next_turn`] resets the
+/// count but never the disable.
+#[derive(Debug, Clone, Default)]
+pub struct FallbackBudget {
+    bad_this_turn: u32,
+    disabled: bool,
+}
+
+impl FallbackBudget {
+    /// Bad blocks repaired per turn before the fallback is disabled.
+    pub const MAX_REPAIRS: u32 = 2;
+
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Classify one extraction against the budget. Once disabled, every
+    /// message is [`FallbackVerdict::Disabled`].
+    pub fn record(&mut self, extract: &PromptExtract) -> FallbackVerdict {
+        if self.disabled {
+            return FallbackVerdict::Disabled;
+        }
+        if !matches!(extract, PromptExtract::BadJson { .. }) {
+            return FallbackVerdict::Proceed;
+        }
+        if self.bad_this_turn >= Self::MAX_REPAIRS {
+            self.disabled = true;
+            return FallbackVerdict::Disabled;
+        }
+        self.bad_this_turn += 1;
+        FallbackVerdict::Repair
+    }
+
+    /// A new user turn: the per-turn count starts over.
+    pub fn next_turn(&mut self) {
+        self.bad_this_turn = 0;
+    }
+
+    #[must_use]
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +262,47 @@ mod tests {
             format_tool_result("get_weather", "call_1", "sunny"),
             "<tool_result name=\"get_weather\" call_id=\"call_1\">\nsunny\n</tool_result>"
         );
+    }
+
+    fn bad() -> PromptExtract {
+        PromptExtract::BadJson { raw: "{".into() }
+    }
+
+    /// T-PROV-008: two malformed blocks are repaired, the third disables.
+    #[test]
+    fn t_prov_008_third_bad_block_disables_the_fallback() {
+        let mut budget = FallbackBudget::new();
+        assert_eq!(budget.record(&bad()), FallbackVerdict::Repair);
+        assert_eq!(budget.record(&bad()), FallbackVerdict::Repair);
+        assert!(!budget.is_disabled());
+        assert_eq!(budget.record(&bad()), FallbackVerdict::Disabled);
+        assert!(budget.is_disabled());
+    }
+
+    #[test]
+    fn a_disabled_fallback_stays_disabled_across_turns_and_good_blocks() {
+        let mut budget = FallbackBudget::new();
+        for _ in 0..3 {
+            budget.record(&bad());
+        }
+        budget.next_turn();
+        assert_eq!(
+            budget.record(&PromptExtract::None),
+            FallbackVerdict::Disabled
+        );
+    }
+
+    #[test]
+    fn a_new_turn_restores_the_repairs_but_a_good_block_does_not() {
+        let mut budget = FallbackBudget::new();
+        budget.record(&bad());
+        budget.record(&bad());
+        assert_eq!(
+            budget.record(&PromptExtract::None),
+            FallbackVerdict::Proceed
+        );
+        budget.next_turn();
+        assert_eq!(budget.record(&bad()), FallbackVerdict::Repair);
+        assert!(!budget.is_disabled());
     }
 }

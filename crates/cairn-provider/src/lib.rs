@@ -32,7 +32,7 @@ pub use adapters::{
 pub use assemble::{parse_tool_args, ToolCallAssembler};
 pub use error::{Backoff, ProviderError, ProviderFault, ALL_FAULTS};
 pub use fallback::{extract_prompt_tool_call, fallback_section, format_tool_result};
-pub use fallback::{PromptExtract, PromptToolCall};
+pub use fallback::{FallbackBudget, FallbackVerdict, PromptExtract, PromptToolCall};
 pub use mock::{steps_from_json, MockProvider, Step};
 pub use retry::{
     delay_bounds, parse_retry_after, sample_delay, RetryBudget, MAX_TOTAL, RATE_LIMIT_CAP,
