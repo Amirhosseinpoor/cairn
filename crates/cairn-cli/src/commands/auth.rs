@@ -209,13 +209,13 @@ fn read_key(provider: &str, key_stdin: bool) -> Result<String, Fail> {
         ));
     }
     let mut line = String::new();
-    if !key_stdin {
+    if key_stdin {
+        std::io::stdin().lock().read_line(&mut line).ok();
+    } else {
         eprint!("API key for {provider} (input hidden): ");
         let _echo = EchoOff::new();
         std::io::stdin().lock().read_line(&mut line).ok();
         eprintln!();
-    } else {
-        std::io::stdin().lock().read_line(&mut line).ok();
     }
     validate_key(line.trim_end_matches(['\r', '\n']))
 }
@@ -244,16 +244,17 @@ fn validate_key(key: &str) -> Result<String, Fail> {
 struct EchoOff(bool);
 
 impl EchoOff {
+    #[cfg(unix)]
     fn new() -> Self {
-        #[cfg(unix)]
-        {
-            let ok = std::process::Command::new("stty")
-                .arg("-echo")
-                .status()
-                .is_ok_and(|status| status.success());
-            return Self(ok);
-        }
-        #[cfg(not(unix))]
+        let ok = std::process::Command::new("stty")
+            .arg("-echo")
+            .status()
+            .is_ok_and(|status| status.success());
+        Self(ok)
+    }
+
+    #[cfg(not(unix))]
+    fn new() -> Self {
         Self(false)
     }
 }
