@@ -1,6 +1,6 @@
 [package]
 name = "cairn-search"
-description = "Lexical search + fetch over web results (SPEC 5.5, D-09)"
+description = "File walking, ignore rules, grep and glob (SPEC 3.2, 6.2.5-6.2.7)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,16 @@ license.workspace = true
 
 [dependencies]
 cairn-core.workspace = true
+globset.workspace = true
+grep-matcher.workspace = true
+grep-regex.workspace = true
+thiserror.workspace = true
+grep-searcher.workspace = true
+ignore.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

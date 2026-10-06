@@ -1,5 +1,20 @@
-//! `cairn-search` — Lexical search + fetch over web results (SPEC 5.5, D-09)
+//! `cairn-search` — file discovery, ignore rules, glob and grep
+//! (SPEC §5.1, §6.2.5–6.2.7).
 //!
-//! Delivered in milestone **M2** (SPEC §15.4). This crate is a compile-checked
-//! placeholder so workspace dependency direction (REQ-ARCH-003) is enforced from
-//! day one; the module boundary and public API land with the milestone.
+//! Everything that looks at the tree goes through one [`IgnoreEngine`], so
+//! `read_file`, `list_dir`, `glob` and `grep` cannot disagree about what is
+//! excluded (REQ-CTX-002).
+
+pub mod binary;
+pub mod glob;
+pub mod grep;
+pub mod ignore_rules;
+pub mod lang;
+pub mod walk;
+
+pub use binary::{classify, Content, SNIFF_BYTES};
+pub use glob::{glob, GlobError, GlobOptions, GlobResult};
+pub use grep::{grep, GrepError, GrepMatch, GrepOptions, GrepResult};
+pub use ignore_rules::{default_global_ignore, IgnoreEngine, IgnoreOptions};
+pub use lang::language_for;
+pub use walk::{walk, Entry, Kind, WalkError, WalkOptions, Walked};

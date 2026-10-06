@@ -8,6 +8,25 @@ license.workspace = true
 
 [dependencies]
 cairn-core.workspace = true
+cairn-perm.workspace = true
+cairn-sandbox.workspace = true
+cairn-search.workspace = true
+futures.workspace = true
+globset.workspace = true
+hex.workspace = true
+jsonschema.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time", "sync"] }
+
+[dev-dependencies]
+cairn-perm.workspace = true
+tempfile.workspace = true
+regex.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros", "rt"] }
 
 [lints]
 workspace = true
