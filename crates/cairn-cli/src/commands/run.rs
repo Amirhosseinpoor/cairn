@@ -5,20 +5,14 @@
 //! 0/3/7 (T-CLI-010). Session replay (`--input`/`--session`) and the tool
 //! loop stay `E-IMPL-STAGE` for M3/M4.
 
-use std::io::Write;
-
-use futures::StreamExt;
-
 use cairn_core::cancel::CancellationToken;
 use cairn_core::error::{codes, ExitStatus};
-use cairn_core::message::{Block, Message, Role, StopReason, Usage};
-use cairn_core::registry::Pricing;
-use cairn_provider::{cost_usd, estimate_request, estimate_tokens, stream_with_retry, StreamEvent};
 
 use crate::args::{ExportArgs, ResumeArgs, RunArgs, SessionsArgs, UpdateArgs};
 use crate::commands::{sessions, Startup};
+use crate::headless::{self, OutputFormat};
 use crate::output::Fail;
-use crate::provide::{self, LiveProvider};
+use crate::provide;
 
 /// `cairn run` — M0 validates input and the offline gate; the model loop is M1.
 pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<i32, Fail> {
@@ -54,12 +48,6 @@ pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<
             "pipe the prompt in, or use -p '<text>'".to_string(),
         ));
     }
-    if args.input.is_some() || args.session.is_some() {
-        return Err(Fail::not_implemented(
-            "`cairn run --input/--session` (session replay)",
-            "M3",
-        ));
-    }
     let prompt = read_prompt(args)?;
     let format = match cli.output.as_deref() {
         None | Some("text") => OutputFormat::Text,
@@ -74,6 +62,41 @@ pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<
     };
 
     let live = provide::build(&startup.loaded.config)?;
+    let store = sessions::store(startup);
+    let turn_hint = 1;
+    let input = match &args.input {
+        None => Vec::new(),
+        Some(path) => {
+            let text = if path.as_os_str() == "-" {
+                read_stdin()?
+            } else {
+                std::fs::read_to_string(path).map_err(|error| {
+                    Fail::new(
+                        codes::FS_NOTFOUND,
+                        ExitStatus::NotFound,
+                        format!("--input {}: {error}", path.display()),
+                        Some("check the path".to_string()),
+                    )
+                })?
+            };
+            headless::parse_input(&text, &args.input_fmt, turn_hint)?
+        }
+    };
+    let plan = headless::Plan {
+        prompt: Some(prompt),
+        format,
+        live,
+        store,
+        workspace: startup.workspace().to_path_buf(),
+        mode: cli
+            .mode
+            .clone()
+            .unwrap_or_else(|| startup.loaded.config.mode.as_str().to_string()),
+        session: args.session.clone(),
+        input,
+        auto_recover: startup.loaded.config.session.auto_recover,
+        quiet: startup.quiet,
+    };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -85,17 +108,7 @@ pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<
                 None,
             )
         })?;
-    let cancel = CancellationToken::new();
-    runtime.block_on(run_once(prompt, format, live, cancel))
-}
-
-/// `--output` for `run`: `text` streams model text, `json` prints one object
-/// at the end, `stream-json` prints one object per event (T-CLI-017).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputFormat {
-    Text,
-    Json,
-    StreamJson,
+    runtime.block_on(headless::execute(plan, CancellationToken::new()))
 }
 
 /// Read the prompt from `-p`, `--prompt-file` (with `-` for stdin), or
@@ -152,210 +165,6 @@ fn read_stdin() -> Result<String, Fail> {
     })
 }
 
-fn stop_name(stop: StopReason) -> &'static str {
-    match stop {
-        StopReason::EndTurn => "end_turn",
-        StopReason::ToolUse => "tool_use",
-        StopReason::MaxTokens => "max_tokens",
-        StopReason::ContentFilter => "content_filter",
-        StopReason::Cancelled => "cancelled",
-        StopReason::Error => "error",
-    }
-}
-
-/// One headless turn: stream the answer in `format`, and exit 0 on a clean
-/// finish, 3 on a model failure (T-CLI-010), 7 on cancel. The token comes
-/// from the caller so tests can raise it without signals.
-async fn run_once(
-    prompt: String,
-    format: OutputFormat,
-    live: LiveProvider,
-    cancel: CancellationToken,
-) -> Result<i32, Fail> {
-    let watcher = cancel.clone();
-    tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        watcher.cancel();
-    });
-
-    let message = Message::new(Role::User, vec![Block::Text { text: prompt }], 1);
-    let mut request =
-        cairn_provider::ModelRequest::new(live.model_id.clone(), vec![message], live.max_tokens);
-    request.temperature = live.temperature;
-    // Without the output reserve `estimate_request` adds: this is the prompt
-    // alone, the fallback when the provider reports no input count.
-    let prompt_tokens = {
-        let mut probe = request.clone();
-        probe.max_tokens = 0;
-        estimate_request(&probe).input
-    };
-    let stream = stream_with_retry(
-        live.provider.clone(),
-        request,
-        cancel.clone(),
-        live.budget.clone(),
-        None,
-    );
-    let mut stream = Box::pin(stream);
-
-    let mut text = String::new();
-    let mut reported: Option<Usage> = None;
-    let mut stop: Option<StopReason> = None;
-    let mut failed = false;
-    while let Some(event) = stream.next().await {
-        match event {
-            StreamEvent::TextDelta { text: part } => {
-                text.push_str(&part);
-                if format == OutputFormat::Text {
-                    print!("{part}");
-                    let _ = std::io::stdout().flush();
-                } else if format == OutputFormat::StreamJson {
-                    println!(
-                        "{}",
-                        serde_json::json!({"type": "text_delta", "text": part})
-                    );
-                }
-            }
-            StreamEvent::ReasoningDelta { .. } | StreamEvent::ReasoningSignature { .. } => {
-                // Text mode shows the answer, not the thinking; the JSON
-                // modes carry the full event below.
-                if format == OutputFormat::StreamJson {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&event).expect("events serialise")
-                    );
-                }
-            }
-            StreamEvent::MessageStart { .. } | StreamEvent::Ping => {
-                if format == OutputFormat::StreamJson {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&event).expect("events serialise")
-                    );
-                }
-            }
-            StreamEvent::ToolCallStart { .. }
-            | StreamEvent::ToolCallDelta { .. }
-            | StreamEvent::ToolCallEnd { .. } => {
-                // M1 sends no tools, so a tool call here is the model
-                // freelancing — surfaced in the JSON modes, not executed.
-                if format == OutputFormat::StreamJson {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&event).expect("events serialise")
-                    );
-                }
-            }
-            StreamEvent::Usage {
-                input,
-                output,
-                cache_read,
-                cache_write,
-            } => {
-                reported = Some(Usage::reported(input, output, cache_read, cache_write));
-                if format == OutputFormat::StreamJson {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&event).expect("events serialise")
-                    );
-                }
-            }
-            StreamEvent::Finish { stop: reason } => {
-                if reason == StopReason::Error {
-                    failed = true;
-                } else {
-                    stop = Some(reason);
-                }
-                if format == OutputFormat::StreamJson {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&event).expect("events serialise")
-                    );
-                }
-            }
-        }
-    }
-    if format == OutputFormat::Text && !text.is_empty() && !text.ends_with('\n') {
-        println!();
-    }
-    if cancel.is_cancelled() && stop.is_none() && !failed {
-        // The stream ended silently, which only cancellation does.
-        return Ok(ExitStatus::Cancelled.code());
-    }
-    if failed {
-        let fault = live.provider.take_last_error();
-        return Err(model_failure(&live.model_id, fault));
-    }
-    let stop = stop.unwrap_or(StopReason::EndTurn);
-    if format == OutputFormat::Json {
-        let report = usage_report(reported, prompt_tokens, &text, &live.pricing);
-        println!(
-            "{}",
-            serde_json::json!({
-                "model": live.model_id,
-                "text": text,
-                "usage": {
-                    "input": report.usage.input,
-                    "output": report.usage.output,
-                    "cache_read": report.usage.cache_read,
-                    "cache_write": report.usage.cache_write,
-                    "estimated": report.usage.estimated,
-                },
-                "cost_usd": report.cost_usd,
-                "stop": stop_name(stop),
-                "error": null,
-            })
-        );
-    }
-    Ok(ExitStatus::Ok.code())
-}
-
-/// What a finished turn spent, and what that cost.
-struct UsageReport {
-    usage: Usage,
-    cost_usd: Option<f64>,
-}
-
-/// REQ-PROV-011: the provider's numbers override Cairn's estimate. A report
-/// that is missing, or says nothing was spent (T-FAULT-005: a proxy that
-/// answers `usage: 0`), is not believed — the §4.8 estimator stands in and
-/// the result is flagged `estimated`. `cost_usd` is `None`, never `0.0`, when
-/// the model has no price (REQ-PROV-012, T-PROV-012).
-fn usage_report(
-    reported: Option<Usage>,
-    prompt_tokens: u32,
-    output_text: &str,
-    pricing: &Pricing,
-) -> UsageReport {
-    let usage = match reported {
-        Some(real) if real.input > 0 || real.output > 0 => real,
-        _ => Usage {
-            output: estimate_tokens(output_text),
-            ..Usage::estimate(prompt_tokens)
-        },
-    };
-    let cost_usd = cost_usd(&usage, pricing);
-    UsageReport { usage, cost_usd }
-}
-
-/// A failed turn: the fault's stable code with exit 3 (T-CLI-010).
-fn model_failure(model_id: &str, fault: Option<cairn_provider::ProviderError>) -> Fail {
-    match fault {
-        Some(error) => Fail::new(
-            error.code().unwrap_or("ERR_GENERIC"),
-            ExitStatus::Provider,
-            format!("model `{model_id}` failed: {}", error.message),
-            Some("see `cairn doctor` for connectivity and credential checks".to_string()),
-        ),
-        None => Fail::new(
-            "ERR_GENERIC",
-            ExitStatus::Provider,
-            format!("model `{model_id}` failed without detail"),
-            None,
-        ),
-    }
-}
-
 /// `cairn chat` (and bare `cairn`) — the TUI is M3.
 pub fn chat(_cli: &crate::args::Cli, _startup: &Startup) -> Result<i32, Fail> {
     Err(Fail::not_implemented(
@@ -364,8 +173,13 @@ pub fn chat(_cli: &crate::args::Cli, _startup: &Startup) -> Result<i32, Fail> {
     ))
 }
 
-/// `cairn resume [SESSION_ID] [--list] [--json]`.
-pub fn resume(_cli: &crate::args::Cli, args: &ResumeArgs, startup: &Startup) -> Result<i32, Fail> {
+/// `cairn resume [SESSION_ID] [--list] [--json]` — restore a session (§8.7,
+/// §11.7) and settle an interrupted turn. The interactive continuation is the
+/// TUI's (M3); until then `cairn run --session ID -p …` carries on.
+pub fn resume(cli: &crate::args::Cli, args: &ResumeArgs, startup: &Startup) -> Result<i32, Fail> {
+    use cairn_agent::transcript::{self, Recovery, SessionWriter};
+    use std::io::IsTerminal;
+
     let Some(id) = args.session_id.as_deref() else {
         // No id: listing is the only useful behaviour before M3.
         return sessions::list(
@@ -385,14 +199,112 @@ pub fn resume(_cli: &crate::args::Cli, args: &ResumeArgs, startup: &Startup) -> 
             "run `cairn sessions` to list stored sessions".to_string(),
         )
     })?;
-    // Replay lands in M3, but *knowing the session loads* does not: a file that
-    // exists and cannot be read must say `E-SESS-CORRUPT` (exit 9) here rather
-    // than "not implemented" (SPEC §11.7 read contract, T-SESS-023).
-    store.load(&path).map_err(Fail::from_cairn)?;
-    Err(Fail::not_implemented(
-        &format!("`cairn resume {id}` (session replay)"),
-        "M3",
-    ))
+    // A file that exists and cannot be read must say `E-SESS-CORRUPT` (exit 9)
+    // (SPEC §11.7 read contract, T-SESS-023).
+    let file = store.load(&path).map_err(Fail::from_cairn)?;
+    let state = transcript::resume_state(&file);
+    let mut writer = SessionWriter::resume(store.clone(), &file);
+
+    let mut reissue = false;
+    if let Some(dangling) = &state.dangling {
+        eprintln!("{}", dangling.banner());
+        let choice = choose_recovery(
+            startup.loaded.config.session.auto_recover,
+            std::io::stdin().is_terminal(),
+            &mut std::io::stdin().lock(),
+        );
+        transcript::recover(&mut writer, &state, choice).map_err(Fail::from_cairn)?;
+        reissue = choice == Recovery::Rebuild;
+    }
+
+    if reissue {
+        // §8.7 `r`: one model call over the committed messages. The turn is
+        // closed above, so a second resume finds nothing to re-issue.
+        let live = provide::build(&startup.loaded.config)?;
+        let plan = headless::Plan {
+            prompt: None,
+            format: OutputFormat::Text,
+            live,
+            store,
+            workspace: startup.workspace().to_path_buf(),
+            mode: cli.mode.clone().unwrap_or_else(|| state.mode.clone()),
+            session: Some(id.to_string()),
+            input: Vec::new(),
+            auto_recover: false,
+            quiet: startup.quiet,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                Fail::new(
+                    "ERR_GENERIC",
+                    ExitStatus::Generic,
+                    format!("cannot start the async runtime: {error}"),
+                    None,
+                )
+            })?;
+        return runtime.block_on(headless::execute(plan, CancellationToken::new()));
+    }
+
+    let file = store.load(&path).map_err(Fail::from_cairn)?;
+    let state = transcript::resume_state(&file);
+    if args.json {
+        crate::output::say(format_args!(
+            "{}",
+            serde_json::json!({
+                "session_id": state.header.session_id,
+                "mode": state.mode,
+                "model": state.header.model,
+                "cwd": state.cwd,
+                "messages": state.messages.len(),
+                "next_turn_id": state.next_turn_id,
+                "cost_usd": state.cost_usd,
+                "dangling": state.dangling.is_some(),
+            })
+        ));
+    } else {
+        crate::output::say(format_args!(
+            "Resumed session {id}: {} messages, mode {}, model {}, ${:.4} so far.\n\
+             Continue with: cairn run --session {id} -p \"…\"",
+            state.messages.len(),
+            state.mode,
+            state.header.model,
+            state.cost_usd,
+        ));
+    }
+    Ok(ExitStatus::Ok.code())
+}
+
+/// §8.7 step 3: which way to settle an interrupted turn. `auto_recover` is
+/// `r`; otherwise a terminal is asked until it answers (end of input keeps
+/// the turn); with no terminal there is nobody to ask, so the choice that
+/// loses nothing — `k` — stands.
+fn choose_recovery(
+    auto_recover: bool,
+    interactive: bool,
+    input: &mut dyn std::io::BufRead,
+) -> cairn_agent::transcript::Recovery {
+    use cairn_agent::transcript::Recovery;
+    if auto_recover {
+        return Recovery::Rebuild;
+    }
+    if !interactive {
+        return Recovery::Keep;
+    }
+    loop {
+        eprint!("[r]ebuild, [d]iscard or [k]eep the partial turn? ");
+        let mut line = String::new();
+        if input.read_line(&mut line).unwrap_or(0) == 0 {
+            return Recovery::Keep;
+        }
+        match line.trim().to_ascii_lowercase().as_str() {
+            "r" => return Recovery::Rebuild,
+            "d" => return Recovery::Discard,
+            "k" => return Recovery::Keep,
+            _ => {}
+        }
+    }
 }
 
 /// `cairn export SESSION_ID --format md|json|html [--output PATH] [--no-redact]`.
@@ -881,47 +793,6 @@ mod tests {
             Some(std::path::PathBuf::from("out.json"))
         );
     }
-    use crate::provide;
-
-    /// A cancelled token ends the turn silently with exit 7 — the signal
-    /// path only has to raise the token; everything after it is covered
-    /// here without signals.
-    #[tokio::test]
-    async fn a_cancelled_token_exits_7() {
-        let config = cairn_config::Config {
-            model: "openai/gpt-5.1-codex".to_string(),
-            ..cairn_config::Config::default()
-        };
-        let live = provide::build(&config).expect("builds without a key");
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-        let code = run_once("hi".to_string(), OutputFormat::Text, live, cancel)
-            .await
-            .expect("cancel exits, never fails");
-        assert_eq!(code, ExitStatus::Cancelled.code());
-    }
-
-    /// Failure codes come from the fault: the turn reports the stable
-    /// `E-*`, and `run` exits 3 (T-CLI-010).
-    #[test]
-    fn model_failures_carry_the_fault_code_at_exit_3() {
-        let error = cairn_provider::ProviderError::new(
-            cairn_provider::ProviderFault::Auth,
-            "bad key".to_string(),
-        );
-        let fail = model_failure("openai/gpt-5.1-codex", Some(error));
-        assert_eq!(fail.code, codes::PROV_AUTH);
-        assert_eq!(fail.exit, ExitStatus::Provider.code());
-    }
-
-    /// Stop reasons render `snake_case` for the JSON modes.
-    #[test]
-    fn stop_reasons_render_snake_case() {
-        assert_eq!(stop_name(StopReason::EndTurn), "end_turn");
-        assert_eq!(stop_name(StopReason::ToolUse), "tool_use");
-        assert_eq!(stop_name(StopReason::MaxTokens), "max_tokens");
-        assert_eq!(stop_name(StopReason::Error), "error");
-    }
 
     /// No prompt source at all is a usage error, not a model call.
     #[test]
@@ -942,51 +813,27 @@ mod tests {
         assert_eq!(err.exit, ExitStatus::Usage.code());
     }
 
-    fn priced() -> Pricing {
-        Pricing {
-            input_per_mtok: Some(3.0),
-            output_per_mtok: Some(15.0),
-            cache_read_per_mtok: None,
-            cache_write_per_mtok: None,
+    #[test]
+    fn recovery_choice_follows_config_then_terminal_then_safety() {
+        use cairn_agent::transcript::Recovery;
+        let mut none = std::io::Cursor::new(Vec::new());
+        assert_eq!(choose_recovery(true, true, &mut none), Recovery::Rebuild);
+        assert_eq!(choose_recovery(false, false, &mut none), Recovery::Keep);
+        // End of input at the prompt keeps the turn.
+        assert_eq!(choose_recovery(false, true, &mut none), Recovery::Keep);
+    }
+
+    #[test]
+    fn the_prompt_accepts_r_d_k_and_asks_again_on_anything_else() {
+        use cairn_agent::transcript::Recovery;
+        for (typed, want) in [
+            ("r\n", Recovery::Rebuild),
+            ("D\n", Recovery::Discard),
+            ("k\n", Recovery::Keep),
+            ("what\n\nd\n", Recovery::Discard),
+        ] {
+            let mut input = std::io::Cursor::new(typed.as_bytes().to_vec());
+            assert_eq!(choose_recovery(false, true, &mut input), want, "{typed:?}");
         }
-    }
-
-    /// REQ-PROV-011: real numbers win and are not flagged.
-    #[test]
-    fn reported_usage_overrides_the_estimate() {
-        let report = usage_report(
-            Some(Usage::reported(1_000_000, 100_000, 0, 0)),
-            7,
-            "ignored",
-            &priced(),
-        );
-        assert!(!report.usage.estimated);
-        assert_eq!(report.usage.input, 1_000_000);
-        assert!((report.cost_usd.expect("priced") - 4.5).abs() < 1e-9);
-    }
-
-    /// T-FAULT-005: a provider that answers `usage: 0` (or nothing) is not
-    /// believed — the estimator runs and the result says so.
-    #[test]
-    fn t_fault_005_zero_or_missing_usage_falls_back_to_the_estimator() {
-        for reported in [Some(Usage::reported(0, 0, 0, 0)), None] {
-            let report = usage_report(reported, 12, "abcdefgh", &priced());
-            assert!(report.usage.estimated, "{reported:?}");
-            assert_eq!(report.usage.input, 12);
-            assert_eq!(report.usage.output, 2, "ceil(8 chars / 4)");
-            assert!(report.cost_usd.is_some(), "an estimate still has a cost");
-        }
-    }
-
-    /// T-PROV-012: no price means `null`, never `0.0`.
-    #[test]
-    fn t_prov_012_an_unpriced_model_reports_null_cost() {
-        let report = usage_report(
-            Some(Usage::reported(10, 10, 0, 0)),
-            0,
-            "",
-            &Pricing::default(),
-        );
-        assert_eq!(report.cost_usd, None);
     }
 }

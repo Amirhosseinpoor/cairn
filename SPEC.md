@@ -1946,9 +1946,9 @@ cairn run -p "prompt" [--mode plan|build|auto] [--output text|json|stream-json]
 - `run` executes **one user turn** (plus its whole tool loop) and exits.
 - `-p/--prompt` with no subcommand implies `run`.
 - `--output text` (default when not a TTY): plain prose to stdout, progress to stderr, no ANSI when `NO_COLOR` set or stdout not a TTY.
-- `--output json`: exactly **one** JSON document at the end: `{"schema_version":1,"status":"ok|error|cancelled|guardrail|denied","turn_id":…,"messages":[…],"tool_calls":[…],"usage":{…},"cost_usd":…,"plan":{…}|null,"error":{…}|null,"exit_code":n}`.
+- `--output json`: exactly **one** JSON document at the end: `{"schema_version":1,"status":"ok|error|cancelled|guardrail|denied","turn_id":…,"messages":[…],"tool_calls":[…],"usage":{…},"cost_usd":…,"plan":{…}|null,"error":{…}|null,"exit_code":n}`, plus `session_id`, `model`, `stop`; `usage` carries `estimated` and `cost_usd` is `null` for a model with no price. The document is printed on failure too (status `error`, the fault's code in `error`).
 - `--output stream-json`: one JSON event per line (the envelope of §3.5), terminated by the final `turn.ended` line; **no other bytes on stdout**.
-- `--input FILE|-`: reads a JSONL transcript to inject as prior context.
+- `--input FILE|-`: reads prior context to inject ahead of the prompt. `--input-fmt text` (default) makes the whole file one `user` message; `--input-fmt json` reads one `{"role":"user"|"assistant","content":"…"}` object per line (a bad line is `E-CLI-USAGE`, exit 2, naming it). `--session ID` continues a stored session; an unknown id is exit 9 (`E-SESS-NOTFOUND`). Every run is persisted, and a turn left dangling by a crash is closed before the new prompt (§8.7; headless uses `r` when `session.auto_recover`, else `k`).
 - `--quiet`: suppresses progress on stderr; only final output/exit code.
 - `--verbose`: adds `model.request`/`model.usage` lines to stderr even in `text` mode.
 

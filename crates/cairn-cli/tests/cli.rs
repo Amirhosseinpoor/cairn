@@ -811,31 +811,32 @@ fn sessions_empty_state() {
     );
 }
 
-/// A stored session is found by id and refused for replay until M3.
+/// A stored session is found by id and its restored state is reported
+/// (T-SESS-013 through the CLI).
 #[test]
-fn resume_of_a_real_session_names_m3() {
+fn resume_of_a_real_session_reports_its_state() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 1, Arc::clone(&bodies));
     let fx = Fixture::new();
-    let dir = fx.home.join("data/sessions/ws16");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("ses_01.jsonl"),
-        "{\"v\":1,\"type\":\"header\",\"schema_version\":1,\"session_id\":\"ses_01\",\
-         \"created_at\":\"2026-10-03T00:00:00.000Z\",\"workspace\":\"/ws\",\"mode\":\"build\",\
-         \"model\":\"anthropic/claude-sonnet-4-5\",\"cairn_version\":\"0.1.0\",\"ruleset_version\":null,\"parent_session\":null}\n",
-    )
-    .unwrap();
+    point_at_loopback(&fx, &url);
+    run_json(&fx, &["-p", "hi"]);
+    let (id, _) = only_session(&fx);
 
-    let out = fx.cairn().args(["sessions", "--json"]).output().unwrap();
-    let rows: serde_json::Value =
-        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-    assert_eq!(rows.as_array().map(Vec::len), Some(1), "{out:?}");
-    assert_eq!(rows[0]["session_id"], "ses_01");
+    let out = fx.cairn().args(["resume", &id, "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let state: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    assert_eq!(state["session_id"], id.as_str());
+    assert_eq!(state["messages"], 2);
+    assert_eq!(state["next_turn_id"], 2);
+    assert_eq!(state["mode"], "build");
+    assert_eq!(state["dangling"], false);
 
-    fx.cairn()
-        .args(["resume", "ses_01"])
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains("E-IMPL-STAGE"));
+    let out = fx.cairn().args(["resume", &id]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains(&format!("cairn run --session {id}")),
+        "{text}"
+    );
 }
 
 // ------------------------------------------------- session fixtures (M1)
@@ -1338,23 +1339,39 @@ fn run_succeeds_in_all_three_formats() {
             "json" => {
                 let value: serde_json::Value =
                     serde_json::from_str(&text).expect("one JSON object");
-                assert_eq!(value["text"], "Hi");
+                assert_eq!(value["schema_version"], 1);
+                assert_eq!(value["status"], "ok");
+                assert_eq!(value["exit_code"], 0);
+                assert_eq!(value["turn_id"], 1);
+                assert_eq!(value["messages"][0]["role"], "assistant");
+                assert_eq!(value["messages"][0]["blocks"][0]["text"], "Hi");
+                assert_eq!(value["tool_calls"], serde_json::json!([]));
                 assert_eq!(value["usage"]["input"], 10);
                 assert_eq!(
                     value["usage"]["estimated"], false,
                     "provider numbers are real"
                 );
-                assert!(value.get("cost_usd").is_some(), "§7.7 carries cost_usd");
+                // The registry carries no price for this model: null, never 0 (REQ-PROV-012).
+                assert!(value["cost_usd"].is_null(), "{value}");
                 assert_eq!(value["stop"], "end_turn");
+                assert!(value["plan"].is_null());
                 assert!(value["error"].is_null());
             }
             _ => {
-                assert!(!text.trim().is_empty(), "stream-json emits lines");
-                for line in text.lines() {
-                    serde_json::from_str::<serde_json::Value>(line).expect("every line is JSON");
-                }
-                assert!(text.contains("text_delta"), "deltas stream: {text}");
-                assert!(text.contains("gpt-5.1-codex"), "start event: {text}");
+                let kinds = envelope_kinds(&text);
+                assert_eq!(
+                    kinds,
+                    [
+                        "session.created",
+                        "turn.started",
+                        "model.request",
+                        "model.delta",
+                        "model.usage",
+                        "message.appended",
+                        "turn.ended"
+                    ],
+                    "{text}"
+                );
             }
         }
     }
@@ -1367,6 +1384,443 @@ fn run_succeeds_in_all_three_formats() {
         assert_eq!(request["model"], "gpt-5.1-codex");
         assert_eq!(request["messages"][0]["content"], "hi");
     }
+}
+
+/// Parse every stdout line as a §3.5 envelope and return the `type`s. Every
+/// line must be JSON with the five envelope keys and `v: 1` (T-CLI-017).
+fn envelope_kinds(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(|line| {
+            let value: serde_json::Value =
+                serde_json::from_str(line).expect("every stdout line is JSON");
+            for key in ["v", "seq", "ts", "session", "type"] {
+                assert!(value.get(key).is_some(), "envelope lacks `{key}`: {line}");
+            }
+            assert_eq!(value["v"], 1);
+            value["type"].as_str().expect("type").to_string()
+        })
+        .collect()
+}
+
+/// The one session file `cairn sessions --json` lists, as (id, path).
+fn only_session(fx: &Fixture) -> (String, PathBuf) {
+    let out = fx
+        .cairn()
+        .args(["sessions", "--json"])
+        .output()
+        .expect("lists");
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON listing");
+    let list = value.as_array().expect("array");
+    assert_eq!(list.len(), 1, "{value}");
+    (
+        list[0]["session_id"].as_str().expect("id").to_string(),
+        PathBuf::from(list[0]["path"].as_str().expect("path")),
+    )
+}
+
+fn records(path: &std::path::Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .expect("session file")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("record"))
+        .collect()
+}
+
+fn run_json(fx: &Fixture, extra: &[&str]) -> (std::process::Output, serde_json::Value) {
+    let mut args = vec!["run", "--output", "json"];
+    args.extend_from_slice(extra);
+    let out = fx
+        .cairn()
+        .env("CAIRN_OPENAI_API_KEY", "test")
+        .args(args)
+        .output()
+        .expect("runs");
+    let doc = serde_json::from_slice(&out.stdout).unwrap_or(serde_json::Value::Null);
+    (out, doc)
+}
+
+/// §11.7: one run writes `header`, `turn_started`, user message, assistant
+/// message, `turn_ended` — in that order, with usage and cost on the end.
+#[test]
+fn a_run_persists_its_turn_to_the_session_store() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    let (out, doc) = run_json(&fx, &["-p", "hi"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let (id, path) = only_session(&fx);
+    assert_eq!(doc["session_id"], id.as_str());
+    let kinds: Vec<String> = records(&path)
+        .iter()
+        .map(|r| r["type"].as_str().expect("type").to_string())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["header", "turn_started", "message", "message", "turn_ended"]
+    );
+    let all = records(&path);
+    let ended = all.last().expect("ended");
+    assert_eq!(ended["status"], "ok");
+    assert_eq!(ended["usage"]["input"], 10);
+    assert_eq!(all[2]["message"]["role"], "user");
+    assert_eq!(all[3]["message"]["role"], "assistant");
+}
+
+/// `--session ID` continues: the second request carries the first exchange,
+/// the file gains a second turn, and nothing is duplicated.
+#[test]
+fn run_session_continues_with_the_earlier_history() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 2, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    run_json(&fx, &["-p", "first"]);
+    let (id, path) = only_session(&fx);
+    let (out, doc) = run_json(&fx, &["-p", "second", "--session", &id]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(doc["turn_id"], 2);
+    assert_eq!(doc["session_id"], id.as_str());
+
+    let bodies = bodies.lock().expect("bodies");
+    let second: serde_json::Value = serde_json::from_slice(&bodies[1]).expect("body");
+    let sent: Vec<String> = second["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .map(|m| {
+            format!(
+                "{}:{}",
+                m["role"].as_str().unwrap_or(""),
+                m["content"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    assert_eq!(sent, ["user:first", "assistant:Hi", "user:second"]);
+    let turns = records(&path)
+        .iter()
+        .filter(|r| r["type"] == "turn_ended")
+        .count();
+    assert_eq!(turns, 2);
+}
+
+/// T-CLI-015: an unknown session is exit 9 with `E-SESS-NOTFOUND`, before
+/// any request is made.
+#[test]
+fn t_cli_015_run_with_an_unknown_session_is_exit_9() {
+    let fx = Fixture::new();
+    let (out, _) = run_json(&fx, &["-p", "hi", "--session", "01NOPE"]);
+    assert_eq!(out.status.code(), Some(9));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("E-SESS-NOTFOUND"));
+}
+
+/// `--input` (text and json) reaches the model ahead of the prompt.
+#[test]
+fn run_input_preloads_context() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 2, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+
+    let text_input = fx.ws.join("context.txt");
+    std::fs::write(&text_input, "background notes\n").expect("input");
+    let (out, _) = run_json(
+        &fx,
+        &["-p", "go", "--input", text_input.to_str().expect("utf8")],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let json_input = fx.ws.join("context.jsonl");
+    std::fs::write(
+        &json_input,
+        "{\"role\":\"user\",\"content\":\"q1\"}\n{\"role\":\"assistant\",\"content\":\"a1\"}\n",
+    )
+    .expect("input");
+    let (out, _) = run_json(
+        &fx,
+        &[
+            "-p",
+            "go",
+            "--input",
+            json_input.to_str().expect("utf8"),
+            "--input-fmt",
+            "json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let bodies = bodies.lock().expect("bodies");
+    let contents = |body: &[u8]| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_slice(body).expect("body");
+        v["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or("").to_string())
+            .collect()
+    };
+    assert_eq!(contents(&bodies[0]), ["background notes", "go"]);
+    assert_eq!(contents(&bodies[1]), ["q1", "a1", "go"]);
+}
+
+/// A malformed `--input` line is a usage error naming the line, and no
+/// session is created for it.
+#[test]
+fn run_input_with_a_bad_line_is_a_usage_error() {
+    let fx = Fixture::new();
+    let input = fx.ws.join("bad.jsonl");
+    std::fs::write(&input, "{\"role\":\"user\",\"content\":\"ok\"}\nnot json\n").expect("input");
+    let (out, _) = run_json(
+        &fx,
+        &[
+            "-p",
+            "go",
+            "--input",
+            input.to_str().expect("utf8"),
+            "--input-fmt",
+            "json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("line 2"), "{stderr}");
+}
+
+/// §7.7: a failed turn still prints exactly one JSON document on stdout —
+/// status `error`, the fault's code, `exit_code` 3 — and exits 3.
+#[test]
+fn a_failed_turn_prints_an_error_document_and_exits_3() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let denied = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+    let url = serve_loopback(denied.as_bytes().to_vec(), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    let (out, doc) = run_json(&fx, &["-p", "hi"]);
+    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(doc["status"], "error");
+    assert_eq!(doc["exit_code"], 3);
+    assert_eq!(doc["error"]["code"], "E-PROV-AUTH");
+    assert_eq!(doc["messages"], serde_json::json!([]));
+
+    // The failure is on disk too: an `error` record and an `error` turn end.
+    let (_, path) = only_session(&fx);
+    let all = records(&path);
+    assert!(all
+        .iter()
+        .any(|r| r["type"] == "error" && r["code"] == "E-PROV-AUTH"));
+    assert_eq!(all.last().expect("last")["status"], "error");
+}
+
+/// A stream-json failure ends with `model.error` then `turn.ended{error}`,
+/// and still nothing but envelopes on stdout.
+#[test]
+fn stream_json_failure_ends_with_model_error_and_turn_ended() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let denied = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+    let url = serve_loopback(denied.as_bytes().to_vec(), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    let out = fx
+        .cairn()
+        .env("CAIRN_OPENAI_API_KEY", "test")
+        .args(["run", "-p", "hi", "--output", "stream-json"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(3));
+    let kinds = envelope_kinds(&String::from_utf8_lossy(&out.stdout));
+    assert_eq!(
+        kinds,
+        [
+            "session.created",
+            "turn.started",
+            "model.request",
+            "model.error",
+            "turn.ended"
+        ]
+    );
+}
+
+/// §8.7 headless: a session whose last turn never ended resumes with the
+/// banner, the committed prompt stays in context, and a second run neither
+/// repeats the banner nor duplicates anything (REQ-LOOP-007).
+#[test]
+fn run_session_recovers_a_dangling_turn_once() {
+    use std::io::Write;
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 2, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    run_json(&fx, &["-p", "first"]);
+    let (id, path) = only_session(&fx);
+
+    // Simulate a crash mid-turn 2: started, prompt durable, no end.
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open");
+    let user = cairn_core::Message::user("interrupted", 2);
+    let seq = records(&path).len() as u64 + 1;
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&cairn_session::Record::turn_started(2, seq)).expect("json")
+    )
+    .expect("write");
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&cairn_session::Record::message(&user, seq + 1)).expect("json")
+    )
+    .expect("write");
+    drop(file);
+
+    let (out, _) = run_json(&fx, &["-p", "after", "--session", &id]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Recovered interrupted turn 2"), "{stderr}");
+
+    let sent: serde_json::Value =
+        serde_json::from_slice(&bodies.lock().expect("bodies")[1]).expect("body");
+    let texts: Vec<&str> = sent["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .map(|m| m["content"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(texts, ["first", "Hi", "interrupted", "after"]);
+
+    // Turn 2 was closed, turn 3 ran; nothing is dangling any more.
+    let all = records(&path);
+    let closed: Vec<(u64, String)> = all
+        .iter()
+        .filter(|r| r["type"] == "turn_ended")
+        .map(|r| {
+            (
+                r["turn_id"].as_u64().unwrap_or(0),
+                r["status"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        closed,
+        [
+            (1, "ok".to_string()),
+            (2, "recovered".to_string()),
+            (3, "ok".to_string())
+        ]
+    );
+}
+
+/// Append a started turn with its prompt durable and no end: what a crash
+/// mid-turn leaves behind (§8.7).
+fn make_dangling(path: &std::path::Path, turn: u64, prompt: &str) {
+    use std::io::Write;
+    let seq = records(path).len() as u64 + 1;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("open");
+    let started = cairn_session::Record::turn_started(turn, seq);
+    let user = cairn_core::Message::user(prompt, turn);
+    let message = cairn_session::Record::message(&user, seq + 1);
+    for record in [started, message] {
+        writeln!(file, "{}", serde_json::to_string(&record).expect("json")).expect("write");
+    }
+}
+
+/// T-SESS-022 (`r`): resuming with `auto_recover` re-issues the model call
+/// over the committed messages exactly once; running resume again finds
+/// nothing dangling, sends nothing, and duplicates nothing (T-SESS-021).
+#[test]
+fn t_sess_022_rebuild_reissues_the_model_call_once() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 2, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    std::fs::write(
+        fx.user_config(),
+        format!(
+            "model = \"openai/gpt-5.1-codex\"\n\n[session]\nauto_recover = true\n\n\
+             [providers.openai]\nbase_url = \"{url}\"\n"
+        ),
+    )
+    .expect("config");
+    run_json(&fx, &["-p", "first"]);
+    let (id, path) = only_session(&fx);
+    make_dangling(&path, 2, "interrupted");
+
+    let out = fx
+        .cairn()
+        .env("CAIRN_OPENAI_API_KEY", "test")
+        .args(["resume", &id])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Recovered interrupted turn 2"));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "Hi\n");
+    {
+        let sent = bodies.lock().expect("bodies");
+        assert_eq!(sent.len(), 2, "the original run plus one re-issue");
+        let body: serde_json::Value = serde_json::from_slice(&sent[1]).expect("body");
+        let texts: Vec<&str> = body["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(texts, ["first", "Hi", "interrupted"]);
+    }
+
+    let closed = |records: &[serde_json::Value]| -> Vec<String> {
+        records
+            .iter()
+            .filter(|r| r["type"] == "turn_ended")
+            .map(|r| r["status"].as_str().unwrap_or("").to_string())
+            .collect()
+    };
+    assert_eq!(closed(&records(&path)), ["ok", "interrupted", "ok"]);
+
+    // Second resume: no banner, no model call, no new records.
+    let before = records(&path).len();
+    let out = fx
+        .cairn()
+        .env("CAIRN_OPENAI_API_KEY", "test")
+        .args(["resume", &id])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("Recovered"));
+    assert_eq!(bodies.lock().expect("bodies").len(), 2);
+    assert_eq!(records(&path).len(), before);
+}
+
+/// Without a terminal and without `auto_recover`, resume keeps the partial
+/// turn as context (`k`) and makes no model call.
+#[test]
+fn resume_without_a_terminal_keeps_the_partial_turn() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = serve_loopback(sse_ok(&success_body()), 1, Arc::clone(&bodies));
+    let fx = Fixture::new();
+    point_at_loopback(&fx, &url);
+    run_json(&fx, &["-p", "first"]);
+    let (id, path) = only_session(&fx);
+    make_dangling(&path, 2, "interrupted");
+
+    let out = fx.cairn().args(["resume", &id, "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let state: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    assert_eq!(
+        state["messages"], 3,
+        "the interrupted prompt stays in context"
+    );
+    assert_eq!(state["dangling"], false);
+    assert_eq!(bodies.lock().expect("bodies").len(), 1, "no model call");
+    let last = records(&path).pop().expect("last");
+    assert_eq!(
+        (last["type"].as_str(), last["status"].as_str()),
+        (Some("turn_ended"), Some("recovered"))
+    );
 }
 
 /// T-CLI-010's failure third: a 401 is exit 3 with the stable code and the

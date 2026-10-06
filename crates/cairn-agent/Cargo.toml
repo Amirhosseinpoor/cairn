@@ -8,6 +8,14 @@ license.workspace = true
 
 [dependencies]
 cairn-core.workspace = true
+cairn-provider.workspace = true
+cairn-session.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

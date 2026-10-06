@@ -16,6 +16,7 @@ macro_rules! yell {
 
 mod args;
 mod commands;
+mod headless;
 mod log;
 mod output;
 mod provide;

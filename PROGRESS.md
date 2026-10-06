@@ -21,7 +21,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **427 passed, 0 failed** |
+| Tests | `cargo test --workspace` | **455 passed, 0 failed** |
 | MSRV | `cargo +1.83.0 test --workspace` | 392 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
@@ -161,6 +161,9 @@ testable — including the command `cairn doctor` points people at.
 | `run --output json` usage honesty — the result now carries `usage.estimated` and `cost_usd` (§7.7): provider numbers override (REQ-PROV-011); a missing or all-zero report falls back to the §4.8 estimator flagged `estimated`; an unpriced model gives `cost_usd: null`, never `0` | done (M1) | T-FAULT-005, T-PROV-012, REQ-PROV-011/012 |
 | §4.5 fatal HTTP rows, live — 401/403/404/405 and a 400 content-filter each make exactly one connection, carry their stable code, and still end the turn with one `Finish { stop: Error }` | done (M1) | T-PROV-034, T-PROV-038, T-PROV-039, T-PROV-043, T-PROV-044 |
 | §4.5 retry rows end to end — 413 now compacts once and resends before going fatal (the loop only did that for a 400 context overflow, though the matrix says "compaction once, then fatal"); 408 / 429-without-header / unreachable each spend exactly five retries and keep their own code; a budget smaller than the backoffs ends a slow server's turn with `E-PROV-TIMEOUT` | done (M1) | T-PROV-036, T-PROV-040, T-PROV-041, T-PROV-042, T-PROV-046, T-PROV-048 |
+| `cairn-agent` turn runner + transcript — `run_turn` folds a provider stream into one committed assistant message (partial attempts discarded per §4.7; a failure after a tool call commits nothing, so no tool result is invented); `SessionWriter` appends §11.7 records one `write`+`fsync` at a time; `resume_state` restores mode, workspace, history, next turn id and cost; `recover` settles a dangling turn as `r`/`d`/`k` exactly once | done (M1) | T-PROV-007, T-SESS-013, T-SESS-021, T-SESS-022, REQ-LOOP-007 |
+| `cairn run` persists and continues — every run writes its session (header, turn, messages, tool results, `turn_ended` with usage and cost); `--session ID` continues it (unknown id = exit 9), `--input FILE` preloads context (`--input-fmt text` or `json`), `--output json` is §7.7's document (also on failure), `--output stream-json` emits §3.5 envelopes only; a dangling turn is closed with the banner before the new prompt | done (M1) | T-CLI-010, T-CLI-015, T-CLI-017, T-SESS-021 |
+| `cairn resume <id>` — loads and reports the restored state; an interrupted turn is settled by `session.auto_recover` (`r`: re-issue the call once), an interactive r/d/k prompt, or `k` with no terminal; the interactive *chat* continuation stays with the TUI (M3) | done (M1) | T-SESS-013, T-SESS-021, T-SESS-022 |
 
 ### Decisions taken while landing the session store
 
