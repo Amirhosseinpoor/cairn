@@ -11,9 +11,13 @@
 //!   `ca_bundle` reaches the TLS client.
 //! * `models.<id>.max_output`/`temperature` override the request fields; the
 //!   retry budget is `max_total_ms` capped at §4.5's 180 s ceiling.
-//! * A model id the registry does not know — including a `models.<id>`
-//!   escape-hatch entry, whose provider and capabilities the config cannot
-//!   express — fails here with `E-CFG-NOMODEL`, not at the socket.
+//! * A model id the registry does not know fails here with `E-CFG-NOMODEL`,
+//!   not at the socket — unless `models.<id>.context_window` is set
+//!   (REQ-PROV-013's escape hatch). That entry is then synthesised: the
+//!   provider is the id's `<provider>/` prefix and must be one the registry
+//!   knows; `max_output` defaults to 4096 (capped at the window), tool calling
+//!   is native only for the hosted kinds (the §4.6 prompt fallback works
+//!   anywhere, so the unknown stays safe), and pricing is `null`.
 
 use std::sync::Arc;
 
@@ -51,6 +55,41 @@ fn effective_registry(config: &Config) -> Registry {
         .unwrap_or_else(|| cairn_core::registry::bundled().clone())
 }
 
+/// REQ-PROV-013's escape hatch: a registry row for a model the registry does
+/// not list, from `models.<id>` plus the provider named by the id's prefix.
+/// `None` when the user did not define a context window, or the prefix names
+/// no registry provider (the caller then reports `E-CFG-NOMODEL`).
+fn user_model_entry(
+    config: &Config,
+    registry: &Registry,
+    id: &str,
+) -> Option<cairn_core::registry::ModelEntry> {
+    use cairn_core::registry::{CapabilityFlags, ModelEntry, Pricing, ProviderKind, Tokenizer};
+
+    let over = config.models.get(id)?;
+    let context_window = over.context_window?;
+    let provider = id.split_once('/')?.0;
+    let kind = registry.providers.get(provider)?.kind;
+    let native_tools = matches!(
+        kind,
+        ProviderKind::Anthropic | ProviderKind::Openai | ProviderKind::OpenaiCompatible
+    );
+    Some(ModelEntry {
+        provider: provider.to_string(),
+        display_name: None,
+        context_window,
+        max_output: over.max_output.unwrap_or_else(|| context_window.min(4096)),
+        capabilities: CapabilityFlags {
+            tool_calling: native_tools,
+            streaming: true,
+            ..CapabilityFlags::default()
+        },
+        pricing: Pricing::default(),
+        tokenizer: Tokenizer::Unknown,
+        aliases: Vec::new(),
+    })
+}
+
 /// Resolve `config.model` to a live provider. Fails with `E-CFG-NOMODEL`
 /// (exit 2) when the id names nothing runnable — the call never starts.
 pub fn build(config: &Config) -> Result<LiveProvider, Fail> {
@@ -59,8 +98,13 @@ pub fn build(config: &Config) -> Result<LiveProvider, Fail> {
         AnthropicAdapter, OllamaAdapter, OpenaiAdapter, OpenaiCompatibleAdapter, VllmAdapter,
     };
 
-    let registry = effective_registry(config);
+    let mut registry = effective_registry(config);
     let model_id = config.model.trim();
+    if registry.resolve_with_provider(model_id).is_none() {
+        if let Some(entry) = user_model_entry(config, &registry, model_id) {
+            registry.models.insert(model_id.to_string(), entry);
+        }
+    }
     let found = registry.resolve_with_provider(model_id).ok_or_else(|| {
         Fail::new(
             codes::CFG_NOMODEL,
@@ -205,5 +249,58 @@ mod tests {
         let live = build(&config).expect("builds");
         assert_eq!(live.max_tokens, 512);
         assert_eq!(live.temperature, Some(0.9));
+    }
+
+    fn user_model(id: &str, window: Option<u32>) -> Config {
+        let mut config = config_with(id);
+        config.models.insert(
+            id.to_string(),
+            cairn_config::ModelOverride {
+                context_window: window,
+                max_output: None,
+                temperature: None,
+            },
+        );
+        config
+    }
+
+    /// REQ-PROV-013: a model the registry lacks runs when the user gives it a
+    /// context window and a known provider prefix.
+    #[test]
+    fn a_user_defined_model_builds_from_its_provider_prefix() {
+        let live = build(&user_model("ollama/my-finetune", Some(32_768))).expect("builds");
+        assert_eq!(live.model_id, "ollama/my-finetune");
+        assert_eq!(live.max_tokens, 4096, "defaults to 4096 under the window");
+        let caps = live.provider.capabilities();
+        assert_eq!(caps.max_context, 32_768);
+        assert!(!caps.tool_calling, "local kinds use the §4.6 fallback");
+    }
+
+    #[test]
+    fn a_small_window_caps_the_default_output() {
+        let live = build(&user_model("ollama/tiny", Some(2048))).expect("builds");
+        assert_eq!(live.max_tokens, 2048);
+    }
+
+    #[test]
+    fn hosted_kinds_get_native_tool_calling() {
+        let live = build(&user_model("openai/ft:gpt-private", Some(128_000))).expect("builds");
+        assert!(live.provider.capabilities().tool_calling);
+    }
+
+    /// Without a window, or with a prefix no provider answers to, it is still
+    /// `E-CFG-NOMODEL`.
+    #[test]
+    fn the_escape_hatch_needs_a_window_and_a_known_provider() {
+        for config in [
+            user_model("ollama/my-finetune", None),
+            user_model("nowhere/my-finetune", Some(8192)),
+            user_model("no-slash", Some(8192)),
+        ] {
+            let Err(err) = build(&config) else {
+                panic!("must not build")
+            };
+            assert_eq!(err.code, codes::CFG_NOMODEL);
+        }
     }
 }

@@ -871,7 +871,7 @@ its canonical id *before* `context_window` and `max_output` are read, so `model 
 and `model = "anthropic/claude-sonnet-4-5"` are the same call with the same limits.
 
 Default models shipped: `anthropic/claude-sonnet-4-5` (default), `openai/gpt-5.1-codex`, `openai/o4-mini`, `ollama/qwen2.5-coder:14b`, `vllm/<custom>` (user must set `base_url`).
-- REQ-PROV-013: `cairn config validate` MUST reject a model id that is in the registry neither as an id nor as an `aliases` entry, unless `models.<id>.context_window` is explicitly defined by the user.
+- REQ-PROV-013: `cairn config validate` MUST reject a model id that is in the registry neither as an id nor as an `aliases` entry, unless `models.<id>.context_window` is explicitly defined by the user. Such a user-defined model takes its provider from the id's `<provider>/` prefix, which MUST name a registry provider (else `E-CFG-NOMODEL`); `max_output` defaults to `min(context_window, 4096)`, `tool_calling` is native only for `anthropic`/`openai`/`openai_compatible` providers (others use the §4.6 prompt fallback), and pricing is `null`.
 - REQ-PROV-014: Registry updates ship with `cairn update`; a registry mismatch MUST NOT break startup — fall back to the bundled copy and report `W-REG-FALLBACK`. An unreadable or malformed `models_path` override does the same, and `cairn config set models_path …` refuses a value it cannot read rather than writing one the next startup discards.
 
 ### 4.10 Credentials
