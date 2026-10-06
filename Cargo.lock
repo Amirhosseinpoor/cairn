@@ -277,6 +277,13 @@ name = "cairn-perm"
 version = "0.1.0"
 dependencies = [
  "cairn-core",
+ "chrono",
+ "globset",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

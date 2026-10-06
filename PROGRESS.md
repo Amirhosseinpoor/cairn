@@ -21,7 +21,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **501 passed, 0 failed** |
+| Tests | `cargo test --workspace` | **524 passed, 0 failed** |
 | MSRV | `cargo +1.83.0 test --workspace` | 392 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
@@ -166,6 +166,7 @@ release signing key exists — M5).
 | `doctor --network` rows 5, 6, 21 — provider reachability (any HTTP answer counts; no answer is `E-PROV-NET`), which local Ollama/vLLM servers answer, and the clock against the provider's `Date` header (warn beyond 60 s); all skipped without the flag, so plain `doctor` makes no request | done (M1) | §12.3 rows 5, 6, 21 |
 | §4.2 compat probe — an OpenAI-compatible server that answers 400 about `tools` is retried once shaped for the §4.6 prompt fallback; the refusal is remembered (`capabilities().tool_calling` turns false) and later calls skip the probe; unrelated 400s, first-party adapters and tool-less requests never probe | done (M1) | §4.2, §4.6, T-PROV-004 |
 | T-PROV-027 / T-FAULT-003 / T-PROV-014 / T-PROV-010 — non-UTF-8 bytes are substituted and warned once (`stream.lossy_utf8`); 2 s gaps for 40 s never trip the 45 s idle timer; a corrupt `models_path` falls back with `W-REG-FALLBACK` and exit 0; ADR-0020 exists and §4.7 links it | done (M1) | T-PROV-027, T-FAULT-003, T-PROV-014, T-PROV-010 |
+| **M2-A1 — `cairn-perm`** — §9.1's rule grammar (path glob, command prefix with word boundaries, command regex, URL host, `tool:*`/`bash:`/`write:`/`mcp__*` actions), the pure `evaluate(rules, request) -> Decision`, the §9.2 table as `assets/default_rules.json` (versioned), lenient loading that skips and reports bad rules (`W-PERM-BADREGEX`), a hard error for an unreadable file, atomic `0600` appends with `r<N>` ids, and `RulePolicy` (session answers in memory, project/user in files). Layering decided and written into §9.1: a person's rule outranks a built-in ask/allow, a built-in deny is a floor, protected paths and denylisted commands are decided before any rule | done | T-PERM-001 (1,296-case matrix + goldens), T-PERM-002, T-PERM-003, T-PERM-004 (2,000 random sets), T-PERM-005, REQ-SAFE-001/002/003/004/005 |
 
 ### Decisions taken while landing the session store
 

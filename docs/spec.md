@@ -2305,6 +2305,14 @@ Stored in `.cairn/permissions.json` (project) and `~/.config/cairn/permissions.j
 `ls, cat, head, tail, wc, find, fd, tree, which, pwd, echo, printenv, env, git status, git log, git diff, git show, git branch, git remote -v, git blame, git config --get, rg, grep, egrep, fgrep, sed -n (read-only), awk (print-only), ps, df, du, id, uname, node --version, python --version, pip --version, npm --version, cargo --version, go version, make -n, jq, curl -I (subject to D7 as network)`.
 
 - REQ-SAFE-005: The default table MUST be implemented as a versioned built-in file `assets/default_rules.json` with `ruleset_version` recorded in the session header (test T-PERM-003 compares live behavior with the asset).
+**Layering, and what the table leaves unsaid (implemented in `cairn-perm`):**
+- **A person's rule outranks a built-in `ask` or `allow`; a built-in `deny` is a floor.** §9.1 rule 1 orders by effect first, which read literally lets a built-in `ask` (D3) beat a user's "always allow `edit_file` in `src/**`" and makes that answer do nothing. So when any user, project or session rule matches a request, the built-in rows with effect `ask` or `allow` step aside; built-in `deny` rows (plan mode never writes, D5/D6/D11 in plan) stay in the contest and win by §9.1 rule 1.
+- **Scope order is `default < user < project < session`.** A session answer is the user's latest word.
+- **D5 and D11b are "any *other* command":** a rule may carry an optional `except` target, and the built-in rows use it to exclude the read-only set that D4 and D11 name. (`bash_background` outside the read-only set is not in the table; D11b gives it D5's effects.)
+- **`url_host` may start with `https://`** (`https://*`, `https://*.example.com`) to require that scheme; D7 is `https://*`, so a plain-`http` fetch matches no built-in row and asks.
+- **No rule matches** → `deny` in `plan`, `ask` in `build`/`auto`, `allow` in `auto-unsafe`.
+- **A protected path (D12) and a denylisted command (D8) are request flags set by the boundary and shell-analysis steps and decided before any rule is read**, so no rule — including a session `allow tool:*` — can reach them. D8 asks in `auto-unsafe`; D12 denies in every mode.
+- The table is `assets/default_rules.json` (`ruleset_version`, one row per `D<n>` with an effect per mode); T-PERM-003 holds it to §9.2 cell for cell.
 
 ### 9.3 Shell safety: AST-based parsing
 
