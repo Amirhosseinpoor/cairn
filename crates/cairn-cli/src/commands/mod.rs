@@ -9,6 +9,7 @@ pub mod auth;
 pub mod completions;
 pub mod config;
 pub mod doctor;
+pub mod init;
 pub mod mcp;
 pub mod run;
 pub mod sessions;
@@ -93,7 +94,7 @@ pub fn dispatch(cli: &Cli) -> Result<i32, Fail> {
         Some(Command::Mcp(cmd)) => mcp::run(cmd, &startup),
         Some(Command::Update(args)) => run::update(args),
         Some(Command::Export(args)) => run::export(cli, args, &startup),
-        Some(Command::Init(args)) => run::init(args),
+        Some(Command::Init(args)) => init::run(args, &startup),
         // `Migrate` is handled above, before the startup checks.
         Some(
             Command::Version(_) | Command::Completions(_) | Command::Doctor(_) | Command::Migrate,

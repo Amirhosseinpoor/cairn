@@ -1191,9 +1191,8 @@ fn mcp_add_and_remove_roundtrip() {
 #[test]
 fn stubs_name_their_milestone() {
     let fx = Fixture::new();
-    let cases: [(&[&str], &str); 5] = [
+    let cases: [(&[&str], &str); 4] = [
         (&["chat"], "M3"),
-        (&["init"], "M3"),
         (&["update"], "M5"),
         (&["mcp", "inspect", "x"], "M4"),
         (&["mcp", "refresh"], "M4"),
@@ -1214,7 +1213,6 @@ fn no_bare_unimplemented_paths() {
     // A panic would exit 101 with a Rust backtrace instead of a stable code.
     for args in [
         vec!["chat"],
-        vec!["init"],
         vec!["update"],
         vec!["migrate"],
         vec!["export", "ses_x"],
@@ -1948,6 +1946,64 @@ fn run_authenticates_with_a_stored_key() {
     let out = fx.cairn().args(["run", "-p", "hi"]).output().expect("runs");
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(bodies.lock().expect("bodies").len(), 1);
+}
+
+/// `cairn init` end to end: scaffolds, reports, and is a no-op the second
+/// time (T-SEC-014's `.gitignore` half, REQ-SAFE-003, §7.3).
+#[test]
+fn init_scaffolds_the_workspace_and_is_idempotent() {
+    let fx = Fixture::new();
+    std::fs::create_dir(fx.ws.join(".git")).expect("git");
+    std::fs::write(fx.ws.join("go.mod"), "module x\n").expect("manifest");
+
+    let out = fx.cairn().arg("init").output().expect("runs");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let report = String::from_utf8_lossy(&out.stdout).to_string();
+    for file in ["AGENTS.md", ".cairnignore", "config.toml", ".gitignore"] {
+        assert!(
+            report.contains("created") && report.contains(file),
+            "{file}: {report}"
+        );
+    }
+    let agents = std::fs::read_to_string(fx.ws.join("AGENTS.md")).expect("agents");
+    assert!(agents.contains("go test ./..."), "{agents}");
+    let ignore = std::fs::read_to_string(fx.ws.join(".gitignore")).expect("ignore");
+    assert!(
+        ignore.lines().any(|l| l == "/.cairn/permissions.json"),
+        "{ignore}"
+    );
+
+    // The scaffolded project config is accepted by the validator.
+    let out = fx
+        .cairn()
+        .args(["config", "validate"])
+        .output()
+        .expect("validates");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let out = fx.cairn().arg("init").output().expect("again");
+    assert_eq!(out.status.code(), Some(0));
+    let again = String::from_utf8_lossy(&out.stdout);
+    assert!(!again.contains("created"), "{again}");
+    assert!(again.contains("Nothing to do"), "{again}");
+    assert_eq!(
+        std::fs::read_to_string(fx.ws.join(".gitignore")).expect("ignore"),
+        ignore
+    );
+}
+
+/// `--global` scaffolds the user-level file and leaves the workspace alone.
+#[test]
+fn init_global_writes_only_the_user_file() {
+    let fx = Fixture::new();
+    let out = fx
+        .cairn()
+        .args(["init", "--global"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(fx.home.join("config").join("AGENTS.md").exists());
+    assert!(!fx.ws.join("AGENTS.md").exists());
 }
 
 /// T-CLI-010's failure third: a 401 is exit 3 with the stable code and the

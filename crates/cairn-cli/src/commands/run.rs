@@ -631,20 +631,6 @@ pub fn update(_args: &UpdateArgs) -> Result<i32, Fail> {
     ))
 }
 
-/// `cairn init [--global]` — scaffolding is M3, alongside §10.3's `/init`.
-///
-/// The command has to exist before then: `cairn doctor` tells people with no
-/// `AGENTS.md` to run it (§12.3), and REQ-SAFE-003 / §7.3 name it as the thing
-/// that appends the `.cairn` entries to `.gitignore`.
-pub fn init(args: &crate::args::InitArgs) -> Result<i32, Fail> {
-    let what = if args.global {
-        "`cairn init --global` (user-level scaffolding)"
-    } else {
-        "`cairn init` (workspace scaffolding)"
-    };
-    Err(Fail::not_implemented(what, "M3"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
