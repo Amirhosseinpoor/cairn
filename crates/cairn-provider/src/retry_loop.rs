@@ -658,6 +658,15 @@ mod tests {
     /// connection closes — except responses flagged to truncate, which stop
     /// mid-body.
     fn serve_scripted(responses: Vec<(Vec<u8>, bool)>, connections: Arc<AtomicUsize>) -> String {
+        serve_capturing(responses, connections, Arc::new(Mutex::new(Vec::new())))
+    }
+
+    /// [`serve_scripted`], also keeping every request body for assertions.
+    fn serve_capturing(
+        responses: Vec<(Vec<u8>, bool)>,
+        connections: Arc<AtomicUsize>,
+        bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+    ) -> String {
         use std::io::{Read, Write};
         use std::net::TcpListener;
 
@@ -687,6 +696,7 @@ mod tests {
                 if !body.is_empty() && socket.read_exact(&mut body).is_err() {
                     return;
                 }
+                bodies.lock().expect("bodies").push(body);
                 if truncate {
                     // Cut the body, never the head: a truncated status line
                     // is a setup failure, not a mid-stream disconnect.
@@ -1041,5 +1051,197 @@ mod tests {
         )]));
         let (_, calls) = collect(provider, request(), RetryBudget::new(), None).await;
         assert_eq!(calls, 1);
+    }
+
+    fn tool_request() -> ModelRequest {
+        use crate::ToolSpec;
+        let mut req = ModelRequest::new(
+            "my/proxy-model",
+            vec![cairn_core::Message::user("read it", 1)],
+            64,
+        );
+        req.tools = vec![ToolSpec {
+            name: "read_file".to_string(),
+            description: "Read a file".to_string(),
+            input_schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string"}}}),
+        }];
+        req
+    }
+
+    fn compat(url: String) -> crate::adapters::OpenaiCompatibleAdapter {
+        crate::adapters::OpenaiCompatibleAdapter::new(
+            "my/proxy-model",
+            url,
+            Some("key".to_string()),
+            Capabilities {
+                tool_calling: true,
+                ..Capabilities::baseline()
+            },
+            None,
+        )
+    }
+
+    fn bad_request(message: &str) -> (Vec<u8>, bool) {
+        let body = format!(r#"{{"error":{{"message":"{message}"}}}}"#);
+        (
+            format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes(),
+            false,
+        )
+    }
+
+    const OK_BODY: &str = concat!(
+        "data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Done\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    async fn collect_events(adapter: Arc<dyn Provider>, req: ModelRequest) -> Vec<StreamEvent> {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            stream_with_retry(
+                adapter,
+                req,
+                CancellationToken::new(),
+                RetryBudget::new(),
+                None,
+            )
+            .collect::<Vec<_>>(),
+        )
+        .await
+        .expect("ends")
+    }
+
+    /// §4.2's auto-detect, end to end: a compatible server that rejects
+    /// `tools` is retried once with the §4.6 prompt fallback, the answer is
+    /// remembered (capabilities now say so), and the next call goes straight
+    /// to the fallback with no probe.
+    #[tokio::test]
+    async fn a_compatible_server_that_rejects_tools_is_probed_once_then_remembered() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let url = serve_capturing(
+            vec![
+                bad_request("Unrecognized request argument supplied: tools"),
+                sse_200(OK_BODY),
+                sse_200(OK_BODY),
+            ],
+            Arc::clone(&connections),
+            Arc::clone(&bodies),
+        );
+        let adapter = Arc::new(compat(url));
+        assert!(adapter.capabilities().tool_calling, "native until refused");
+
+        let events = collect_events(adapter.clone(), tool_request()).await;
+        assert!(events.contains(&StreamEvent::TextDelta {
+            text: "Done".to_string()
+        }));
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            2,
+            "probe, then the fallback"
+        );
+        assert!(
+            !adapter.capabilities().tool_calling,
+            "the refusal is remembered"
+        );
+
+        let sent: Vec<serde_json::Value> = bodies
+            .lock()
+            .expect("bodies")
+            .iter()
+            .map(|b| serde_json::from_slice(b).expect("JSON body"))
+            .collect();
+        assert!(sent[0].get("tools").is_some(), "the probe carries tools");
+        assert!(sent[1].get("tools").is_none(), "the retry does not");
+        assert!(
+            sent[1].to_string().contains("read_file"),
+            "the tool is described in the prompt instead: {}",
+            sent[1]
+        );
+
+        // The next call skips the probe: one connection, no `tools` key.
+        collect_events(adapter.clone(), tool_request()).await;
+        assert_eq!(connections.load(Ordering::SeqCst), 3);
+        let third: serde_json::Value =
+            serde_json::from_slice(&bodies.lock().expect("bodies")[2]).expect("JSON body");
+        assert!(third.get("tools").is_none());
+    }
+
+    /// A 400 that is *not* about tools is an ordinary fatal error: no probe,
+    /// no second request, capabilities unchanged.
+    #[tokio::test]
+    async fn an_unrelated_400_is_not_mistaken_for_a_tools_refusal() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let url = serve_capturing(
+            vec![
+                bad_request("temperature must be between 0 and 1"),
+                sse_200(OK_BODY),
+            ],
+            Arc::clone(&connections),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let adapter = Arc::new(compat(url));
+        let events = collect_events(adapter.clone(), tool_request()).await;
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            events,
+            vec![StreamEvent::Finish {
+                stop: StopReason::Error,
+            }]
+        );
+        assert!(adapter.capabilities().tool_calling);
+    }
+
+    /// Only the compatible adapter probes: a first-party endpoint refusing
+    /// `tools` is a real error to surface, not a capability to infer.
+    #[tokio::test]
+    async fn first_party_adapters_never_probe() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let url = serve_capturing(
+            vec![
+                bad_request("Unrecognized request argument supplied: tools"),
+                sse_200(OK_BODY),
+            ],
+            Arc::clone(&connections),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let adapter = Arc::new(crate::adapters::OpenaiAdapter::new(
+            "openai/gpt-5.1-codex",
+            cairn_core::registry::bundled(),
+            Some("key".to_string()),
+            None,
+            Some(url),
+        ));
+        let mut req = tool_request();
+        req.model = "openai/gpt-5.1-codex".to_string();
+        let events = collect_events(adapter, req).await;
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            events,
+            vec![StreamEvent::Finish {
+                stop: StopReason::Error,
+            }]
+        );
+    }
+
+    /// A request with no tools never probes, whatever the server says.
+    #[tokio::test]
+    async fn a_request_without_tools_never_probes() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let url = serve_capturing(
+            vec![bad_request("tools are not supported"), sse_200(OK_BODY)],
+            Arc::clone(&connections),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let adapter = Arc::new(compat(url));
+        let mut req = tool_request();
+        req.tools.clear();
+        collect_events(adapter.clone(), req).await;
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        assert!(adapter.capabilities().tool_calling);
     }
 }

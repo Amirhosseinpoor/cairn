@@ -182,6 +182,7 @@ dependencies = [
  "cairn-core",
  "cairn-provider",
  "cairn-session",
+ "cairn-testkit",
  "chrono",
  "clap",
  "clap_complete",
@@ -295,6 +296,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -340,7 +342,13 @@ dependencies = [
 name = "cairn-testkit"
 version = "0.1.0"
 dependencies = [
+ "cairn-agent",
  "cairn-core",
+ "cairn-provider",
+ "cairn-session",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

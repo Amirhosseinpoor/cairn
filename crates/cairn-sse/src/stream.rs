@@ -209,6 +209,30 @@ mod tests {
         );
     }
 
+    /// T-FAULT-003: a server that sends a chunk every 2 s keeps the stream
+    /// alive indefinitely — the idle window restarts on each chunk, so a
+    /// 40 s turn made of 2 s gaps never trips the 45 s timeout.
+    #[tokio::test(start_paused = true)]
+    async fn t_fault_003_slow_chunks_never_trip_the_idle_timer() {
+        let start = tokio::time::Instant::now();
+        let slow = futures::stream::unfold(0_u32, |n| async move {
+            if n == 20 {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let line = format!("data: chunk {n}\n\n");
+            Some((Ok::<_, io::Error>(Bytes::from(line)), n + 1))
+        });
+        let mut stream = SseStream::new(slow, SseOptions::default(), CancellationToken::new());
+        let mut seen = 0;
+        while let Some(event) = stream.next_event().await.expect("no idle abort") {
+            assert_eq!(event.data, format!("chunk {seen}"));
+            seen += 1;
+        }
+        assert_eq!(seen, 20);
+        assert_eq!(start.elapsed(), Duration::from_secs(40));
+    }
+
     /// T-PROV-032 — the deadline is the configured one (5 s ± 200 ms; virtual
     /// time makes the assertion exact).
     #[tokio::test(start_paused = true)]

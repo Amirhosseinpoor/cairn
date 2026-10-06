@@ -749,7 +749,7 @@ mod tests {
         let guard = tracing::dispatcher::set_default(&dispatch);
         tracing::warn!(
             event = "stream.lossy_utf8",
-            code = "W-PROV-LOSSY",
+            code = "W-TEST-SAMPLE",
             count = 3u64,
             "substituted hunter2-secret bytes"
         );
@@ -764,7 +764,7 @@ mod tests {
         let record: serde_json::Value = serde_json::from_str(&lines[0]).expect("JSONL");
         assert_eq!(record["level"], "warn");
         assert_eq!(record["event"], "stream.lossy_utf8");
-        assert_eq!(record["code"], "W-PROV-LOSSY");
+        assert_eq!(record["code"], "W-TEST-SAMPLE");
         assert_eq!(record["kv"]["count"], 3);
         let rendered = lines[0].clone();
         assert!(!rendered.contains("hunter2-secret"), "redacted: {rendered}");

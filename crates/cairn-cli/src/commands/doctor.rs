@@ -141,28 +141,24 @@ fn collect(startup: &super::Startup, args: &DoctorArgs) -> Vec<Row> {
         row_3_config(startup),
         row_4_provider_keys(startup),
     ];
-    rows.push(Row::skip(
-        5,
-        "provider reachability",
-        "error",
-        "probing needs the HTTP client (M1)",
-    ));
-    rows.push(Row::skip(
-        6,
-        "ollama/vllm auto-detect",
-        "info",
-        "local server probing lands in M1",
-    ));
+    let net = args.network.then(|| NetProbe::run(startup));
+    rows.push(row_5_reachability(net.as_ref()));
+    rows.push(row_6_local_servers(net.as_ref()));
     rows.push(row_7_shell(cfg));
     rows.push(row_8_git(startup));
     rows.push(row_9_agents(startup));
     rows.push(row_10_workspace(startup));
-    rows.push(Row::skip(11, "ignore engine", "info", "wired up in M1"));
+    rows.push(Row::skip(
+        11,
+        "ignore engine",
+        "info",
+        "the ignore engine lands in M3",
+    ));
     rows.push(Row::skip(
         12,
         "ripgrep",
         "info",
-        "embedded ripgrep lands in M1",
+        "embedded ripgrep lands in M2",
     ));
     rows.push(Row::skip(13, "tui capabilities", "info", "TUI lands in M3"));
     rows.push(row_14_hooks(cfg));
@@ -172,28 +168,304 @@ fn collect(startup: &super::Startup, args: &DoctorArgs) -> Vec<Row> {
     rows.push(row_18_disk(startup));
     rows.push(row_19_telemetry(cfg));
     rows.push(row_20_terminal());
-    rows.push(Row::skip(
-        21,
-        "time sync",
-        "warn",
-        "clock check needs the HTTP client (M1)",
-    ));
+    rows.push(row_21_clock(net.as_ref()));
     rows.push(row_22_orphans(startup));
     rows.push(Row::skip(23, "tool table", "info", "--tools needs M2"));
     rows.push(row_24_env());
-    rows.push(Row::skip(
-        25,
-        "self-check",
-        "info",
-        "--deep needs a fixture provider (M1)",
-    ));
+    rows.push(row_25_self_check(startup, args.deep));
     // The flags select extra rows; until their subsystems land they only change
     // what the SKIP rows promise, so they are recorded in the details above.
-    let _ = (args.deep, args.network, args.tools);
+    let _ = args.tools;
     rows
 }
 
 // ------------------------------------------------------------------ rows
+
+// ------------------------------------------------------------ network rows
+
+/// What one HTTP probe saw.
+#[derive(Debug, Clone)]
+struct Probe {
+    url: String,
+    status: Option<u16>,
+    date: Option<String>,
+    error: Option<String>,
+    millis: u128,
+}
+
+/// The `--network` probes, run once and shared by rows 5, 6 and 21.
+#[derive(Debug)]
+struct NetProbe {
+    provider: String,
+    active: Probe,
+    ollama: Probe,
+    vllm: Probe,
+}
+
+fn provider_base(startup: &super::Startup, provider: &str) -> String {
+    let configured = startup
+        .loaded
+        .config
+        .providers
+        .get(provider)
+        .map(|p| p.base_url.clone())
+        .filter(|url| !url.is_empty());
+    configured
+        .or_else(|| {
+            cairn_core::registry::bundled()
+                .providers
+                .get(provider)
+                .map(|entry| entry.base_url.clone())
+        })
+        .unwrap_or_default()
+}
+
+async fn probe(client: &reqwest::Client, url: String) -> Probe {
+    let started = std::time::Instant::now();
+    let request = match client.get(&url).build() {
+        Ok(request) => request,
+        Err(error) => {
+            return Probe {
+                url,
+                status: None,
+                date: None,
+                error: Some(error.to_string()),
+                millis: 0,
+            }
+        }
+    };
+    let result = client.execute(request).await;
+    let millis = started.elapsed().as_millis();
+    match result {
+        Ok(response) => Probe {
+            status: Some(response.status().as_u16()),
+            date: response
+                .headers()
+                .get(reqwest::header::DATE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+            url,
+            error: None,
+            millis,
+        },
+        Err(error) => Probe {
+            url,
+            status: None,
+            date: None,
+            error: Some(error.to_string()),
+            millis,
+        },
+    }
+}
+
+impl NetProbe {
+    /// Three probes in parallel, each capped at 3 s, so `--network` is never
+    /// slower than its slowest target.
+    fn run(startup: &super::Startup) -> Self {
+        let model = startup.loaded.config.model.trim().to_string();
+        let provider = cairn_core::registry::bundled()
+            .resolve_with_provider(&model)
+            .map_or_else(
+                || {
+                    model
+                        .split_once('/')
+                        .map_or(String::new(), |(p, _)| p.to_string())
+                },
+                |found| found.provider_id.to_string(),
+            );
+        let active_url = provider_base(startup, &provider);
+        let ollama = format!(
+            "{}/api/tags",
+            provider_base(startup, "ollama").trim_end_matches('/')
+        );
+        let vllm = format!(
+            "{}/models",
+            provider_base(startup, "vllm").trim_end_matches('/')
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        let dead = |url: &str| Probe {
+            url: url.to_string(),
+            status: None,
+            date: None,
+            error: Some("no async runtime".to_string()),
+            millis: 0,
+        };
+        let Ok(runtime) = runtime else {
+            return Self {
+                provider,
+                active: dead(&active_url),
+                ollama: dead(&ollama),
+                vllm: dead(&vllm),
+            };
+        };
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap_or_default();
+        let (active, ollama, vllm) = runtime.block_on(async {
+            futures::join!(
+                probe(&client, active_url.clone()),
+                probe(&client, ollama),
+                probe(&client, vllm)
+            )
+        });
+        Self {
+            provider,
+            active,
+            ollama,
+            vllm,
+        }
+    }
+}
+
+/// §12.3 row 5: can the active provider's host be reached? *Any* HTTP answer
+/// is yes — a 401 or 404 still proves the network path, and checking the key
+/// is row 4's job.
+fn row_5_reachability(net: Option<&NetProbe>) -> Row {
+    let Some(net) = net else {
+        return Row::skip(
+            5,
+            "provider reachability",
+            "error",
+            "pass --network to probe",
+        );
+    };
+    match (&net.active.status, &net.active.error) {
+        (Some(status), _) => Row::pass(
+            5,
+            "provider reachability",
+            "error",
+            format!(
+                "{}: {} answered HTTP {status} in {} ms",
+                net.provider, net.active.url, net.active.millis
+            ),
+        ),
+        (None, error) => Row::fail(
+            5,
+            "provider reachability",
+            "error",
+            format!(
+                "{}: cannot reach {}: {}",
+                net.provider,
+                net.active.url,
+                error.as_deref().unwrap_or("no answer")
+            ),
+            "E-PROV-NET",
+        ),
+    }
+}
+
+/// §12.3 row 6: which local model servers are listening (informational — an
+/// absent server is normal, not a problem).
+fn row_6_local_servers(net: Option<&NetProbe>) -> Row {
+    let Some(net) = net else {
+        return Row::skip(
+            6,
+            "ollama/vllm auto-detect",
+            "info",
+            "pass --network to probe",
+        );
+    };
+    let describe = |name: &str, probe: &Probe| match probe.status {
+        Some(code) if (200..300).contains(&code) => format!("{name}: running ({})", probe.url),
+        Some(code) => format!("{name}: answered HTTP {code} ({})", probe.url),
+        None => format!("{name}: not running"),
+    };
+    Row::pass(
+        6,
+        "ollama/vllm auto-detect",
+        "info",
+        format!(
+            "{}; {}",
+            describe("ollama", &net.ollama),
+            describe("vllm", &net.vllm)
+        ),
+    )
+}
+
+/// How far `local` is ahead of the server's clock, in seconds (negative when
+/// behind). `None` when the header is not an HTTP date.
+fn clock_skew_seconds(date_header: &str, local: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    let server = chrono::DateTime::parse_from_rfc2822(date_header).ok()?;
+    Some((local - server.with_timezone(&chrono::Utc)).num_seconds())
+}
+
+/// Beyond this much skew, signed requests and "cost today" arithmetic start
+/// lying.
+const MAX_SKEW_SECONDS: i64 = 60;
+
+/// §12.3 row 21: compare the local clock with the provider's `Date` header.
+fn row_21_clock(net: Option<&NetProbe>) -> Row {
+    let Some(net) = net else {
+        return Row::skip(21, "time sync", "warn", "pass --network to compare clocks");
+    };
+    let Some(date) = &net.active.date else {
+        return Row::skip(21, "time sync", "warn", "the provider sent no Date header");
+    };
+    match clock_skew_seconds(date, chrono::Utc::now()) {
+        None => Row::warn(
+            21,
+            "time sync",
+            "warn",
+            format!("unreadable Date header `{date}`"),
+        ),
+        Some(skew) if skew.abs() > MAX_SKEW_SECONDS => Row::warn(
+            21,
+            "time sync",
+            "warn",
+            format!(
+                "local clock is {skew:+} s from {}'s; sync it (NTP)",
+                net.provider
+            ),
+        ),
+        Some(skew) => Row::pass(
+            21,
+            "time sync",
+            "warn",
+            format!("within {MAX_SKEW_SECONDS} s ({skew:+} s)"),
+        ),
+    }
+}
+
+/// §12.3 row 25: with `--deep`, one scripted turn against a fixture provider
+/// per smoke task, through the real turn loop and session store. Writes only
+/// under the cache directory and removes what it wrote (REQ-OPS-005).
+fn row_25_self_check(startup: &super::Startup, deep: bool) -> Row {
+    if !deep {
+        return Row::skip(
+            25,
+            "self-check",
+            "info",
+            "pass --deep to run the scripted smoke tasks",
+        );
+    }
+    let scratch = startup.loaded.paths.cache_home.join("doctor-deep");
+    let report = cairn_testkit::run_all(&cairn_testkit::smoke_tasks(), &scratch);
+    let _ = std::fs::remove_dir(&scratch);
+    if report.all_passed() {
+        Row::pass(
+            25,
+            "self-check",
+            "info",
+            format!(
+                "{}/{} scripted tasks passed",
+                report.passed(),
+                report.results.len()
+            ),
+        )
+    } else {
+        let failed: Vec<String> = report
+            .results
+            .iter()
+            .filter(|r| !r.passed())
+            .map(|r| format!("{}: {}", r.id, r.failures.join("; ")))
+            .collect();
+        Row::fail(25, "self-check", "error", failed.join(" | "), "ERR_GENERIC")
+    }
+}
 
 fn row_1_binary() -> Row {
     Row::pass(
@@ -864,5 +1136,21 @@ mod tests {
         let f = Row::fail(2, "y", "error", "bad", codes::FS_PERM);
         let v = serde_json::to_value(&f).unwrap();
         assert_eq!(v["code"], codes::FS_PERM);
+    }
+
+    #[test]
+    fn clock_skew_reads_http_dates_and_signs_the_difference() {
+        let local = chrono::DateTime::parse_from_rfc2822("Mon, 01 Jan 2001 00:02:00 GMT")
+            .expect("date")
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            clock_skew_seconds("Mon, 01 Jan 2001 00:00:00 GMT", local),
+            Some(120)
+        );
+        assert_eq!(
+            clock_skew_seconds("Mon, 01 Jan 2001 00:05:00 GMT", local),
+            Some(-180)
+        );
+        assert_eq!(clock_skew_seconds("yesterday", local), None);
     }
 }

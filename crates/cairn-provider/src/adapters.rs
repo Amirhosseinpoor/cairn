@@ -14,6 +14,7 @@
 //! `Config`.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
@@ -87,6 +88,10 @@ struct Core {
     client: Result<reqwest::Client, ProviderError>,
     /// The fault behind a mid-stream `Finish { stop: Error }`, if any.
     last_error: Arc<Mutex<Option<ProviderError>>>,
+    /// §4.2's auto-detect probe, remembered: set once a compatible server
+    /// has rejected native `tools`, after which every call is shaped for the
+    /// §4.6 prompt fallback and `capabilities()` says so.
+    tools_rejected: AtomicBool,
 }
 
 impl Core {
@@ -122,7 +127,21 @@ impl Core {
             resolved,
             client: transport::build_client(ca_bundle),
             last_error: Arc::new(Mutex::new(None)),
+            tools_rejected: AtomicBool::new(false),
         }
+    }
+
+    /// What this adapter can do *now*: the registry row, minus native tool
+    /// calling once the server has refused it.
+    fn capabilities(&self) -> Capabilities {
+        let mut caps = self
+            .resolved
+            .as_ref()
+            .map_or(Capabilities::baseline(), |found| found.capabilities);
+        if self.tools_rejected.load(Ordering::Relaxed) {
+            caps.tool_calling = false;
+        }
+        caps
     }
 
     /// Non-network capability probe (§3.4): credentials present, model id
@@ -204,34 +223,61 @@ impl Core {
         cancel: CancellationToken,
     ) -> BoxFuture<'_, Result<BoxStream<'static, StreamEvent>, ProviderError>> {
         async move {
-            let resolved = self.check_ready()?;
-            let client = self.client.as_ref().map_err(Clone::clone)?;
-            let url = format!(
-                "{}{}",
-                resolved.base_url.trim_end_matches('/'),
-                self.shape.path()
-            );
-            let request = Request {
-                url,
-                headers: self.headers(resolved),
-                body: shape_body(
-                    self.shape,
-                    &resolved.model,
-                    resolved.capabilities.tool_calling,
-                    &req,
-                ),
-            };
-            transport::post_events(
-                client,
-                self.provider.as_str(),
-                request,
-                self.kind,
-                cancel,
-                Arc::clone(&self.last_error),
-            )
-            .await
+            let native = self.capabilities().tool_calling;
+            let first = self.post(&req, native, cancel.clone()).await;
+            // §4.2, "auto-detect" for an OpenAI-compatible server: the first
+            // call that carries tools *is* the probe. A 400 that blames the
+            // tools means the server has no native tool calling, so the same
+            // call is sent again shaped for the §4.6 prompt fallback, once,
+            // and the answer is remembered for the rest of the process.
+            match first {
+                Err(error)
+                    if native
+                        && self.kind == ProviderKind::OpenaiCompatible
+                        && !req.tools.is_empty()
+                        && rejects_native_tools(&error) =>
+                {
+                    self.tools_rejected.store(true, Ordering::Relaxed);
+                    tracing::info!(
+                        event = "provider.tools_probe",
+                        provider = self.provider.as_str(),
+                        "server rejected native tools; using the prompt fallback"
+                    );
+                    self.post(&req, false, cancel).await
+                }
+                other => other,
+            }
         }
         .boxed()
+    }
+
+    async fn post(
+        &self,
+        req: &ModelRequest,
+        native_tools: bool,
+        cancel: CancellationToken,
+    ) -> Result<BoxStream<'static, StreamEvent>, ProviderError> {
+        let resolved = self.check_ready()?;
+        let client = self.client.as_ref().map_err(Clone::clone)?;
+        let url = format!(
+            "{}{}",
+            resolved.base_url.trim_end_matches('/'),
+            self.shape.path()
+        );
+        let request = Request {
+            url,
+            headers: self.headers(resolved),
+            body: shape_body(self.shape, &resolved.model, native_tools, req),
+        };
+        transport::post_events(
+            client,
+            self.provider.as_str(),
+            request,
+            self.kind,
+            cancel,
+            Arc::clone(&self.last_error),
+        )
+        .await
     }
 
     fn count_impl(req: &ModelRequest) -> BoxFuture<'_, Result<TokenCount, ProviderError>> {
@@ -239,6 +285,28 @@ impl Core {
         // contract): counting is pure arithmetic on the request.
         async move { Ok(estimate_request(req)) }.boxed()
     }
+}
+
+/// Whether a 400 is the server refusing the `tools` parameter itself (as
+/// opposed to any other bad request, which must not be silently retried).
+fn rejects_native_tools(error: &ProviderError) -> bool {
+    if error.fault != ProviderFault::BadRequest {
+        return false;
+    }
+    let message = error.message.to_ascii_lowercase();
+    [
+        "tools",
+        "tool_choice",
+        "function call",
+        "functions",
+        "unknown field",
+        "unrecognized",
+        "unsupported parameter",
+        "extra inputs",
+        "not supported",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
 }
 
 /// The §4.9 provider key for a kind: the name `id()` reports and
@@ -321,10 +389,7 @@ impl Provider for AnthropicAdapter {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.core
-            .resolved
-            .as_ref()
-            .map_or(Capabilities::baseline(), |found| found.capabilities)
+        self.core.capabilities()
     }
 
     fn stream(
@@ -391,10 +456,7 @@ impl Provider for OpenaiAdapter {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.core
-            .resolved
-            .as_ref()
-            .map_or(Capabilities::baseline(), |found| found.capabilities)
+        self.core.capabilities()
     }
 
     fn stream(
@@ -466,6 +528,7 @@ impl OpenaiCompatibleAdapter {
                 }),
                 client: transport::build_client(ca_bundle),
                 last_error: Arc::new(Mutex::new(None)),
+                tools_rejected: AtomicBool::new(false),
             },
         }
     }
@@ -477,10 +540,7 @@ impl Provider for OpenaiCompatibleAdapter {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.core
-            .resolved
-            .as_ref()
-            .map_or(Capabilities::baseline(), |found| found.capabilities)
+        self.core.capabilities()
     }
 
     fn stream(
@@ -547,10 +607,7 @@ impl Provider for OllamaAdapter {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.core
-            .resolved
-            .as_ref()
-            .map_or(Capabilities::baseline(), |found| found.capabilities)
+        self.core.capabilities()
     }
 
     fn stream(
@@ -619,10 +676,7 @@ impl Provider for VllmAdapter {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.core
-            .resolved
-            .as_ref()
-            .map_or(Capabilities::baseline(), |found| found.capabilities)
+        self.core.capabilities()
     }
 
     fn stream(

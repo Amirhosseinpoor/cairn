@@ -7,7 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cairn-agent.workspace = true
 cairn-core.workspace = true
+cairn-provider.workspace = true
+cairn-session.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

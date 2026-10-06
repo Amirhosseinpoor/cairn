@@ -17,6 +17,7 @@ cairn-config.workspace = true
 cairn-provider.workspace = true
 cairn-agent.workspace = true
 cairn-session.workspace = true
+cairn-testkit.workspace = true
 chrono.workspace = true
 clap.workspace = true
 clap_complete.workspace = true

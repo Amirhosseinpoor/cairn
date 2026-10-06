@@ -362,6 +362,8 @@ struct Reading {
     decoder: WireDecoder,
     pending: VecDeque<StreamEvent>,
     finished_source: bool,
+    /// Lossy-UTF-8 substitutions already reported, so each is warned once.
+    lossy_logged: usize,
 }
 
 /// Drive one [`SseStream`] through one [`WireDecoder`] as a `StreamEvent`
@@ -381,6 +383,7 @@ fn pump(
             decoder,
             pending: VecDeque::new(),
             finished_source: false,
+            lossy_logged: 0,
         }),
         move |reading| {
             let record = Arc::clone(&record);
@@ -394,16 +397,30 @@ fn pump(
                         return None;
                     }
                     match reading.sse.next_event().await {
-                        Ok(Some(sse_event)) => match reading.decoder.decode(&sse_event.data) {
-                            Ok(more) => reading.pending.extend(more),
-                            Err(error) => {
-                                *record.lock().expect("fault record") = Some(error);
-                                let tail = StreamEvent::Finish {
-                                    stop: StopReason::Error,
-                                };
-                                return Some((tail, None));
+                        Ok(Some(sse_event)) => {
+                            // §4.3: `cairn-sse` carries no logger — it counts
+                            // events that needed U+FFFD, and this is where the
+                            // `warn` is emitted.
+                            let lossy = reading.sse.parser().lossy_count();
+                            if lossy > reading.lossy_logged {
+                                tracing::warn!(
+                                    event = "stream.lossy_utf8",
+                                    count = lossy as u64,
+                                    "provider sent bytes that are not UTF-8; substituted U+FFFD"
+                                );
+                                reading.lossy_logged = lossy;
                             }
-                        },
+                            match reading.decoder.decode(&sse_event.data) {
+                                Ok(more) => reading.pending.extend(more),
+                                Err(error) => {
+                                    *record.lock().expect("fault record") = Some(error);
+                                    let tail = StreamEvent::Finish {
+                                        stop: StopReason::Error,
+                                    };
+                                    return Some((tail, None));
+                                }
+                            }
+                        }
                         Ok(None) => {
                             reading.finished_source = true;
                             let clean = reading.decoder.ended_cleanly();
@@ -773,5 +790,84 @@ mod tests {
             at.elapsed()
         );
         assert!(rest.is_empty(), "nothing arrives after cancel");
+    }
+
+    /// A subscriber that remembers each event's fields as `name=value` text.
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<String>>>);
+
+    impl tracing::Subscriber for Capture {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Fields(Vec<String>);
+            impl tracing::field::Visit for Fields {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    self.0.push(format!("{}={value:?}", field.name()));
+                }
+            }
+            let mut fields = Fields(vec![format!("level={}", event.metadata().level())]);
+            event.record(&mut fields);
+            self.0.lock().expect("capture").push(fields.0.join(" "));
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// T-PROV-027: bytes that are not UTF-8 inside a text delta are replaced
+    /// with U+FFFD, a `warn` is logged once, and the stream carries on to its
+    /// normal end.
+    #[tokio::test]
+    async fn t_prov_027_non_utf8_bytes_are_substituted_warned_once_and_survived() {
+        let capture = Capture::default();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+
+        // `content` carries a lone 0xFF between two ASCII halves.
+        let mut bad = b"data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ab".to_vec();
+        bad.push(0xFF);
+        bad.extend_from_slice(b"cd\"},\"finish_reason\":null}]}\n\n");
+        let rest = concat!(
+            "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let source: ByteStream = Box::pin(futures::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(bad)),
+            Ok(Bytes::from_static(rest.as_bytes())),
+        ]));
+        let sse = SseStream::new(source, SseOptions::default(), CancellationToken::new());
+        let events: Vec<StreamEvent> = pump(
+            sse,
+            WireDecoder::new(ProviderKind::Openai),
+            Arc::new(Mutex::new(None)),
+        )
+        .collect()
+        .await;
+
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "ab\u{FFFD}cd");
+        assert!(events.contains(&StreamEvent::Finish {
+            stop: StopReason::EndTurn,
+        }));
+        let logged = capture.0.lock().expect("capture");
+        let warns: Vec<&String> = logged.iter().filter(|l| l.contains("level=WARN")).collect();
+        assert_eq!(warns.len(), 1, "{logged:?}");
+        assert!(warns[0].contains("stream.lossy_utf8"), "{warns:?}");
+        assert!(warns[0].contains("count=1"), "{warns:?}");
     }
 }

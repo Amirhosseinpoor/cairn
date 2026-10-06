@@ -21,7 +21,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **485 passed, 0 failed** |
+| Tests | `cargo test --workspace` | **501 passed, 0 failed** |
 | MSRV | `cargo +1.83.0 test --workspace` | 392 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
@@ -104,12 +104,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 
 ### Not yet implemented (by milestone)
 
-- **M1** — `cairn-parse`, the five `cairn-provider` adapters (§4.4 shaping over the landed trait),
-  the §4.5 retry loop, a mock provider with cassettes, the headless `run -p` loop with
-  text/json/stream-json and the §11.2 exit codes, logging + redaction (§12.1): T-PROV-*, T-FAULT-*,
-  T-CLI-010..017, T-SEC-002, T-ARCH-005..008 (the narrowed §15.4 span). The session half (T-SESS-*),
-  `cairn-sse` (D-04), §4.8/§4.9's registry + accounting and the boxed `Provider` trait have landed —
-  see below.
+- **M1** — complete except what needs later milestones, listed under *Next*.
 - **M2** — tools, edit/fuzzy, bash, git, checkpoints, permissions: T-TOOL-*, T-EDIT-*, T-CMD-*, T-PERM-*, T-CHK-*
 - **M3** — context engine, index, TUI: T-CTX-*, T-TUI-*, T-PROMPT-*
 - **M4** — modes, guardrails, sandbox, injection defenses, subagents, MCP, hooks: T-MODE-*, T-SBOX-*, T-SEC-020..030, T-LOOP-*
@@ -167,6 +162,10 @@ release signing key exists — M5).
 | `cairn auth login` / `logout` — a key is read from `--key-stdin` or a no-echo prompt, validated as one clean token, and stored as `providers.<id>.api_key` in the user config at `0600` (§4.10 step 4); logout removes it and says if an environment key remains. The OS keychain (step 3) needs a per-platform backend and stays unbuilt | done (M1, keychain deferred) | REQ-PROV-015, REQ-PROV-017, REQ-PROV-018, §4.10 |
 | `cairn init [--global]` — scaffolds `AGENTS.md` (build/test commands detected from the manifests present), `.cairnignore`, `.cairn/config.toml` and the `.gitignore` lines REQ-SAFE-003 / §7.3 / §4.10 ask for; never overwrites, only appends missing `.gitignore` lines, honours `plans.shareable` / `security.share_permissions`, accepts `CAIRN.md` as the alias, skips `.gitignore` outside a git repository; a second run changes nothing | done (M1; §10.3's `/init` shares it in M3) | T-SEC-014, REQ-SAFE-003, §7.3, §5.7 |
 | `cairn update` — `--check` reads the release manifest (`CAIRN_UPDATE_URL`, https or loopback only), orders versions, picks this platform's asset and prints REQ-OPS-007's two sentences; an install while any turn runs is exit 10 `cannot update: a turn is in progress` (per-process `active-turns/<pid>` markers, stale ones pruned); installing itself refuses with `E-UPDATE-SIGNATURE` because §1.5/REQ-OPS-006 require a bundled `cairn-release.pub` that does not exist yet | `--check` and the busy guard done (M1); install deferred to M5 | T-CLI-016, T-OPS-002, REQ-OPS-007 |
+| Eval harness (`cairn-testkit`) — `Task`/`Turn`/`Check` over scripted providers, the real turn loop and the session store, scored on completion, answer text, stop reason, provider usage, tool-call count and what a *resume from disk* restores; three smoke tasks (answer, conversation across turns and a resume, a tool call with no tool to run) plus negative tests proving it reports a wrong expectation; `cairn doctor --deep` runs them under the cache dir and leaves nothing behind | done (M1; the 30-task suite follows M2–M5) | T-EVAL harness boots, §12.3 row 25, REQ-OPS-005 |
+| `doctor --network` rows 5, 6, 21 — provider reachability (any HTTP answer counts; no answer is `E-PROV-NET`), which local Ollama/vLLM servers answer, and the clock against the provider's `Date` header (warn beyond 60 s); all skipped without the flag, so plain `doctor` makes no request | done (M1) | §12.3 rows 5, 6, 21 |
+| §4.2 compat probe — an OpenAI-compatible server that answers 400 about `tools` is retried once shaped for the §4.6 prompt fallback; the refusal is remembered (`capabilities().tool_calling` turns false) and later calls skip the probe; unrelated 400s, first-party adapters and tool-less requests never probe | done (M1) | §4.2, §4.6, T-PROV-004 |
+| T-PROV-027 / T-FAULT-003 / T-PROV-014 / T-PROV-010 — non-UTF-8 bytes are substituted and warned once (`stream.lossy_utf8`); 2 s gaps for 40 s never trip the 45 s idle timer; a corrupt `models_path` falls back with `W-REG-FALLBACK` and exit 0; ADR-0020 exists and §4.7 links it | done (M1) | T-PROV-027, T-FAULT-003, T-PROV-014, T-PROV-010 |
 
 ### Decisions taken while landing the session store
 
@@ -359,26 +358,19 @@ own: a section that claims completeness, and does not have it.
 14. §15.6 lists `docs/spec.md` as "this document" while the deliverable is `SPEC.md` — both exist and
     are byte-identical, enforced by `scripts/lint-docs.sh --check-spec-copy`.
 
-## Next: M1 — Provider + headless loop
+## Next
 
-The session store, `cairn-sse`, the boxed `Provider` trait, §4.5's retry policy and §4.8/§4.9's
-registry + accounting are done, and the spec now agrees with where the provider code belongs.
-Next, in order:
+**M1 is feature-complete for everything that does not need tools, modes, the TUI or a release
+key.** What it deliberately leaves, and who owns it:
 
-1. **The mock provider and its cassettes** are landed (`MockProvider`, five committed
-   scripts, live loopback proofs). The headless one-shot is landed too (`run -p` with
-   three formats and 0/3/7 exits). What remains on the provider side: T-PROV-002/007/030/031
-   need the message assembler (deltas → `ToolCall` blocks with §4.3 repair, caps and orphan
-   checks — agent-side, lands with the turn loop), T-PROV-008's counting needs the same
-   loop, and T-PROV-027's logged `warn` needs §12.1's logging.
-2. **User-model bridging and the compat probe.** Adapters resolve against the bare
-   registry: a user-defined `models.<id>` (REQ-PROV-013's escape hatch) and a proxy's
-   declared capabilities need the `run` wiring, which owns the full `Config`, to reach
-   them — plus §4.2's auto-detect probe (first `stream()` with tools refines
-   `tool_calling`) and §4.10 steps 3–5 (keychain, config files). None of it is network
-   shape; all of it is construction plumbing.
-4. **`cairn-parse`** (the tree-sitter wrapper).
-5. **Headless `cairn run -p …`** with text/json/stream-json output and the §11.2 exit codes
-   (T-CLI-010..014/016/017), then logging + redaction (§12.1).
+| Item | Needs | Owner |
+|------|-------|-------|
+| `cairn chat` / bare `cairn` | the TUI | M3 |
+| T-CLI-011 (exit 4), T-CLI-012 (exit 5), T-CLI-013 (exit 6), T-CLI-014 (exit 8) | guardrails, verification, permissions, plans | M2–M4 |
+| T-FAULT-002 (three malformed tool-argument turns) | the multi-iteration tool loop | M2 |
+| OS keychain (§4.10 step 3) | a per-platform backend | M5 |
+| `cairn update` install | the `cairn-release.pub` signing key | M5 |
+| Responses API decoding (§4.2) | recorded as outstanding in §16.5 | M2 |
+| `cairn-parse` (tree-sitter) | syntax validation in the edit pipeline | M2 / M3 |
 
-Every gate above must stay green as these land.
+Every gate above stays green as these land.

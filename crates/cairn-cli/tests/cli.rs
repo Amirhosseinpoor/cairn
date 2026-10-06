@@ -2152,6 +2152,186 @@ fn update_failures_name_the_problem() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("offline"));
 }
 
+fn doctor_row(fx: &Fixture, args: &[&str], n: u64) -> serde_json::Value {
+    let out = fx
+        .cairn()
+        .arg("doctor")
+        .args(args)
+        .arg("--json")
+        .output()
+        .expect("runs");
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    doc["checks"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["n"] == n)
+        .cloned()
+        .expect("row")
+}
+
+/// §12.3 row 25 / REQ-OPS-005: `--deep` runs the three scripted smoke tasks
+/// through the real turn loop and leaves nothing behind; without it the row
+/// says how to ask for it.
+#[test]
+fn doctor_deep_runs_the_smoke_tasks_and_leaves_no_trace() {
+    let fx = Fixture::new();
+    let plain = doctor_row(&fx, &[], 25);
+    assert_eq!(plain["status"], "skip", "{plain}");
+    assert!(plain["detail"].as_str().unwrap_or("").contains("--deep"));
+
+    let deep = doctor_row(&fx, &["--deep"], 25);
+    assert_eq!(deep["status"], "pass", "{deep}");
+    assert_eq!(deep["detail"], "3/3 scripted tasks passed");
+    let scratch = fx.home.join("cache").join("doctor-deep");
+    assert!(!scratch.exists(), "the scratch directory is removed");
+    assert!(
+        !fx.ws.join("AGENTS.md").exists() && !fx.ws.join(".cairn").join("sessions").exists(),
+        "the workspace is untouched"
+    );
+}
+
+/// T-PROV-014: a corrupt `models.json` override never breaks startup — the
+/// bundled copy is used, `W-REG-FALLBACK` is reported, and the command still
+/// exits 0.
+#[test]
+fn t_prov_014_a_corrupt_models_file_falls_back_to_the_bundle() {
+    let fx = Fixture::new();
+    let broken = fx.ws.join("models.json");
+    std::fs::write(&broken, "{ this is not json").expect("corrupt registry");
+    std::fs::write(
+        fx.user_config(),
+        format!(
+            "models_path = \"{}\"\n",
+            broken.display().to_string().replace('\\', "/")
+        ),
+    )
+    .expect("config");
+    let out = fx
+        .cairn()
+        .args(["config", "validate"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("W-REG-FALLBACK"), "{stderr}");
+}
+
+/// T-PROV-010: the no-SSE-resume decision is recorded in ADR-0020 and §4.7
+/// links to it — the doc is there, not empty, and actually linked.
+#[test]
+fn t_prov_010_the_resume_decision_is_recorded_and_linked() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let adr = std::fs::read_to_string(root.join("docs/adr/ADR-0020.md")).expect("ADR-0020");
+    assert!(adr.len() > 200, "ADR-0020 is a stub");
+    let spec = std::fs::read_to_string(root.join("SPEC.md")).expect("spec");
+    let section = spec
+        .split("### 4.7")
+        .nth(1)
+        .and_then(|rest| rest.split("\n### ").next())
+        .expect("§4.7 exists");
+    assert!(
+        section.contains("docs/adr/ADR-0020.md"),
+        "§4.7 must link ADR-0020"
+    );
+}
+
+/// A loopback server answering every request `200` with the given `Date`.
+fn serve_with_date(date: &str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback");
+    let address = listener.local_addr().expect("addr");
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ndate: {date}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}"
+    );
+    std::thread::spawn(move || {
+        while let Ok((mut socket, _)) = listener.accept() {
+            let mut head = [0u8; 4096];
+            let _ = socket.read(&mut head);
+            let _ = socket.write_all(response.as_bytes());
+        }
+    });
+    format!("http://{address}")
+}
+
+fn network_config(fx: &Fixture, openai: &str, ollama: &str, vllm: &str) {
+    std::fs::write(
+        fx.user_config(),
+        format!(
+            "model = \"openai/gpt-5.1-codex\"\n\n\
+             [providers.openai]\nbase_url = \"{openai}\"\n\n\
+             [providers.ollama]\nbase_url = \"{ollama}\"\n\n\
+             [providers.vllm]\nbase_url = \"{vllm}\"\n"
+        ),
+    )
+    .expect("config");
+}
+
+/// §12.3 rows 5, 6 and 21 with `--network`: reachability of the active
+/// provider, which local servers answer, and the clock check — and all three
+/// stay skipped without the flag, so plain `doctor` makes no request.
+#[test]
+fn doctor_network_probes_reachability_local_servers_and_clock() {
+    let fx = Fixture::new();
+    let now = chrono::Utc::now().to_rfc2822();
+    let provider = serve_with_date(&now);
+    let ollama = serve_with_date(&now);
+    network_config(&fx, &provider, &ollama, "http://127.0.0.1:1");
+
+    for n in [5, 6, 21] {
+        assert_eq!(
+            doctor_row(&fx, &[], n)["status"],
+            "skip",
+            "row {n} without the flag"
+        );
+    }
+    let row5 = doctor_row(&fx, &["--network"], 5);
+    assert_eq!(row5["status"], "pass", "{row5}");
+    assert!(
+        row5["detail"].as_str().unwrap_or("").contains("HTTP 200"),
+        "{row5}"
+    );
+
+    let row6 = doctor_row(&fx, &["--network"], 6);
+    let detail = row6["detail"].as_str().unwrap_or("");
+    assert!(detail.contains("ollama: running"), "{row6}");
+    assert!(detail.contains("vllm: not running"), "{row6}");
+
+    let row21 = doctor_row(&fx, &["--network"], 21);
+    assert_eq!(row21["status"], "pass", "{row21}");
+}
+
+/// A provider host that does not answer fails row 5 with `E-PROV-NET`, and
+/// the run exits 1; a wildly wrong clock only warns.
+#[test]
+fn doctor_network_reports_an_unreachable_provider_and_a_skewed_clock() {
+    let fx = Fixture::new();
+    network_config(
+        &fx,
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:1",
+    );
+    let row5 = doctor_row(&fx, &["--network"], 5);
+    assert_eq!(row5["status"], "fail", "{row5}");
+    assert_eq!(row5["code"], "E-PROV-NET");
+    let out = fx
+        .cairn()
+        .args(["doctor", "--network"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(1), "a failed row exits 1");
+
+    let skewed = serve_with_date("Mon, 01 Jan 2001 00:00:00 GMT");
+    network_config(&fx, &skewed, "http://127.0.0.1:1", "http://127.0.0.1:1");
+    let row21 = doctor_row(&fx, &["--network"], 21);
+    assert_eq!(row21["status"], "warn", "{row21}");
+    assert!(
+        row21["detail"].as_str().unwrap_or("").contains("clock"),
+        "{row21}"
+    );
+}
+
 /// T-CLI-010's failure third: a 401 is exit 3 with the stable code and the
 /// login hint — no retries, no success output.
 #[test]
