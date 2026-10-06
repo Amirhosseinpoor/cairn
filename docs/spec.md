@@ -4249,7 +4249,7 @@ cairn/
 | `libloading` | 0.8 | dynamic grammars (REQ-TOOL-028) |
 | `clap` | 4.5 | CLI parsing, completions (derive) |
 | `thiserror` / `anyhow` | 2.0 / 1.0 | errors (D-15) |
-| `tracing` / `tracing-subscriber` / `tracing-appender` | 0.1 / 0.3 / 0.1 | logging (§12.1) |
+| `tracing` / `tracing-subscriber` | 0.1 / 0.3 | logging (§12.1); rotation and the non-blocking buffer are hand-rolled — `tracing-appender` only rotates daily, and its `time` dependency breaks MSRV 1.83 |
 | `ulid` | 1.1 | ids |
 | `sha2` / `hex` | 0.10 / 0.4 | hashing (file state, workspace ids) |
 | `regex` | 1.11 | redaction, rules |

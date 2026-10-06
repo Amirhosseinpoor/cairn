@@ -15,6 +15,7 @@
 
 mod accounting;
 mod adapters;
+mod assemble;
 mod error;
 mod fallback;
 mod mock;
@@ -28,6 +29,7 @@ pub use accounting::{cost_usd, estimate_request, estimate_tokens};
 pub use adapters::{
     env_key, AnthropicAdapter, OllamaAdapter, OpenaiAdapter, OpenaiCompatibleAdapter, VllmAdapter,
 };
+pub use assemble::{parse_tool_args, ToolCallAssembler};
 pub use error::{Backoff, ProviderError, ProviderFault, ALL_FAULTS};
 pub use fallback::{extract_prompt_tool_call, fallback_section, format_tool_result};
 pub use fallback::{PromptExtract, PromptToolCall};

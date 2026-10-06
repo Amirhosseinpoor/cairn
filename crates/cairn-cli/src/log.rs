@@ -43,6 +43,10 @@ const TOTAL_CAP_BYTES: u64 = 50 * 1024 * 1024;
 /// [`LogGuard::dropped`] counts them (REQ-OPS-001).
 const QUEUE_DEPTH: usize = 1024;
 
+/// How long [`LogGuard::shutdown`] keeps trying to queue `Stop` (50 x 10 ms).
+const STOP_ATTEMPTS: u32 = 50;
+const STOP_RETRY: Duration = Duration::from_millis(10);
+
 /// How often the worker flushes without being asked.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -51,6 +55,10 @@ enum Item {
     Line(Vec<u8>),
     /// Flush now — the layer sends one after every `error` record (§12.1).
     Flush,
+    /// Flush and exit. The global subscriber keeps its layer, and so a
+    /// sender, alive for the whole process, so the channel never disconnects
+    /// on its own and shutdown cannot wait for that.
+    Stop,
 }
 
 /// An append-only log file with size rotation and a directory cap.
@@ -141,7 +149,7 @@ impl RotatingFile {
     }
 
     /// Delete oldest-first until the directory is back under the cap. Age
-    /// comes from mtime with a name fallback; the current file is exempt.
+    /// comes from mtime with a generation-number fallback; the current file is exempt.
     fn prune(&self) -> io::Result<()> {
         let dir = self.path.parent();
         let Some(dir) = dir else {
@@ -172,7 +180,19 @@ impl RotatingFile {
                 meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
             ));
         }
-        entries.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
+        // Equal mtimes (a coarse clock) fall back to the generation suffix:
+        // `.3` is older than `.1`, and the current file is generation 0.
+        let generation = |path: &Path| {
+            path.to_string_lossy()
+                .rsplit('.')
+                .next()
+                .and_then(|suffix| suffix.parse::<u32>().ok())
+                .unwrap_or(0)
+        };
+        entries.sort_by(|a, b| {
+            a.2.cmp(&b.2)
+                .then_with(|| generation(&b.0).cmp(&generation(&a.0)))
+        });
         for (path, size, _) in entries {
             if total <= self.total_cap {
                 break;
@@ -205,7 +225,7 @@ fn run_worker(receiver: mpsc::Receiver<Item>, mut file: RotatingFile) {
             Ok(Item::Flush) | Err(mpsc::RecvTimeoutError::Timeout) => {
                 let _ = file.flush();
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Ok(Item::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = file.flush();
                 break;
             }
@@ -233,7 +253,7 @@ impl NonBlocking {
         )
     }
 
-    fn send(&self, item: Item) {
+    fn enqueue(&self, item: Item) {
         if self.sender.try_send(item).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
@@ -324,9 +344,11 @@ where
         if let Some(redactor) = &self.redactor {
             line = redactor.redact(&line);
         }
-        self.sink.send(Item::Line(line.into_bytes()));
-        if *meta.level() >= tracing::Level::ERROR {
-            self.sink.send(Item::Flush);
+        self.sink.enqueue(Item::Line(line.into_bytes()));
+        // `tracing` orders by verbosity (TRACE is the greatest), so `>= ERROR`
+        // would match every level.
+        if *meta.level() == tracing::Level::ERROR {
+            self.sink.enqueue(Item::Flush);
         }
     }
 }
@@ -426,9 +448,22 @@ impl LogGuard {
     /// the sense that calling it twice joins nothing the second time.
     #[must_use]
     pub fn shutdown(mut self) -> u64 {
-        self.sender.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+        if let Some(sender) = self.sender.take() {
+            // A full queue drains within a few milliseconds; if it somehow
+            // does not, leave the worker unjoined rather than hang the exit.
+            let mut stopped = false;
+            for _ in 0..STOP_ATTEMPTS {
+                if sender.try_send(Item::Stop).is_ok() {
+                    stopped = true;
+                    break;
+                }
+                std::thread::sleep(STOP_RETRY);
+            }
+            if stopped {
+                if let Some(worker) = self.worker.take() {
+                    let _ = worker.join();
+                }
+            }
         }
         self.dropped()
     }
@@ -581,7 +616,13 @@ mod tests {
                     .is_some_and(|name| name.to_string_lossy().starts_with(stem.as_str()))
             })
             .collect();
-        files.sort();
+        // Oldest first: the highest generation suffix, the current file last.
+        let generation = |path: &Path| {
+            path.extension()
+                .and_then(|ext| ext.to_string_lossy().parse::<u32>().ok())
+                .unwrap_or(0)
+        };
+        files.sort_by_key(|path| std::cmp::Reverse(generation(path)));
         for file in files {
             let text = fs::read_to_string(&file).expect("read");
             lines.extend(text.lines().map(str::to_string));
@@ -614,20 +655,80 @@ mod tests {
     fn the_directory_cap_prunes_oldest_first() {
         let path = temp_path("prune");
         let dir = path.parent().expect("parent").to_path_buf();
-        for generation in 1..=3 {
+        // Oldest first, as rotation would have left them.
+        for generation in (1..=3).rev() {
             let stale = dir.join(format!("cairn.log.{generation}"));
             fs::write(&stale, vec![b'x'; 100]).expect("write");
         }
-        let file = RotatingFile::new(path.clone(), 10_485_760, 3, 250);
-        let mut file = file.expect("open");
+        let mut file = RotatingFile::new(path.clone(), 10_485_760, 3, 250).expect("open");
         file.write_line(b"current").expect("write");
-        // total starts at 307 (3 stale + current); the cap is 250, so the
-        // two oldest generations go and the newest stale plus current stay.
+        // 3 stale x 100 bytes + the current line is over the 250 cap by 58:
+        // exactly one file has to go, and it is the oldest generation.
+        file.prune().expect("prune");
+        assert!(
+            !dir.join("cairn.log.3").exists(),
+            "the oldest generation goes first"
+        );
+        assert!(dir.join("cairn.log.2").exists());
+        assert!(dir.join("cairn.log.1").exists());
+        assert!(path.exists(), "the current file is never pruned");
+
+        // Far over budget: every stale generation goes, the current file stays.
+        file.total_cap = 1;
         file.prune().expect("prune");
         assert!(!dir.join("cairn.log.1").exists());
         assert!(!dir.join("cairn.log.2").exists());
         assert!(path.exists(), "the current file is never pruned");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A coarse clock gives every file the same mtime; the generation suffix
+    /// then decides, and `.3` is older than `.1`.
+    #[test]
+    fn equal_mtimes_prune_the_highest_generation_first() {
+        let path = temp_path("ties");
+        let dir = path.parent().expect("parent").to_path_buf();
+        let stamp = std::time::SystemTime::now();
+        for generation in 1..=3 {
+            let stale = dir.join(format!("cairn.log.{generation}"));
+            fs::write(&stale, vec![b'x'; 100]).expect("write");
+            File::options()
+                .write(true)
+                .open(&stale)
+                .and_then(|f| f.set_modified(stamp))
+                .expect("set mtime");
+        }
+        let file = RotatingFile::new(path.clone(), 10_485_760, 3, 250).expect("open");
+        file.prune().expect("prune");
+        assert!(!dir.join("cairn.log.3").exists());
+        assert!(dir.join("cairn.log.1").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The global subscriber keeps its layer, and so a sender, alive for the
+    /// life of the process: shutdown must flush and return anyway.
+    #[test]
+    fn shutdown_returns_while_a_layer_still_holds_a_sender() {
+        let path = temp_path("shutdown");
+        let file = RotatingFile::new(path.clone(), 10_485_760, 3, TOTAL_CAP_BYTES).expect("open");
+        let (sink, worker) = NonBlocking::new(file);
+        let guard = LogGuard {
+            sender: Some(sink.sender.clone()),
+            worker: Some(worker),
+            dropped: Arc::clone(&sink.dropped),
+        };
+        sink.enqueue(Item::Line(b"last words".to_vec()));
+        let (done, finished) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let _ = done.try_send(guard.shutdown());
+        });
+        let dropped = finished
+            .recv_timeout(Duration::from_secs(5))
+            .expect("shutdown must not wait for the layer's sender to go away");
+        assert_eq!(dropped, 0);
+        assert_eq!(read_lines(&path), vec!["last words".to_string()]);
+        drop(sink);
+        std::fs::remove_dir_all(path.parent().expect("parent")).ok();
     }
 
     /// A scoped subscriber through the real layer writes one redacted JSONL
@@ -653,6 +754,9 @@ mod tests {
             "substituted hunter2-secret bytes"
         );
         drop(guard);
+        // The dispatch owns the layer, hence the sender; the worker only
+        // drains once the last sender is gone.
+        drop(dispatch);
         worker.join().expect("worker drains");
 
         let lines = read_lines(&path);
