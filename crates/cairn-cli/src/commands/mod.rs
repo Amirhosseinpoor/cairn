@@ -66,12 +66,24 @@ pub fn dispatch(cli: &Cli) -> Result<i32, Fail> {
 
     emit_startup_issues(&loaded, cli.quiet)?;
 
+    // §12.1 logging starts here: after the commands that must run without a
+    // config, after startup validation (so a broken log path cannot hide a
+    // broken config). Every command below runs with the file layer
+    // installed; the guard flushes on the way out.
+    let log_guard = crate::log::init(
+        &loaded.config,
+        &loaded.paths.default_log_file(),
+        cli.log_level.as_deref(),
+        cli.verbose,
+        cli.log_file.as_deref(),
+    )?;
+
     let startup = Startup {
         loaded,
         quiet: cli.quiet,
     };
 
-    match &cli.command {
+    let code = match &cli.command {
         None | Some(Command::Chat(_)) => run::chat(cli, &startup),
         Some(Command::Run(args)) => run::run(cli, args, &startup),
         Some(Command::Resume(args)) => run::resume(cli, args, &startup),
@@ -86,7 +98,9 @@ pub fn dispatch(cli: &Cli) -> Result<i32, Fail> {
         Some(
             Command::Version(_) | Command::Completions(_) | Command::Doctor(_) | Command::Migrate,
         ) => unreachable!("handled above"),
-    }
+    };
+    let _ = log_guard.shutdown();
+    code
 }
 
 /// Argument rules clap cannot express (SPEC §11.1 `run` signature).

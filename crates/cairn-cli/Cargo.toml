@@ -16,12 +16,15 @@ cairn-core.workspace = true
 cairn-config.workspace = true
 cairn-provider.workspace = true
 cairn-session.workspace = true
+chrono.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 
