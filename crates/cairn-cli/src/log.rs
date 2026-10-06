@@ -364,9 +364,14 @@ where
 /// `trace.debug_unsafe` (`E-CFG-UNSAFEREDACT`).
 #[must_use]
 pub fn redactor_for(config: &Config) -> Option<Redactor> {
-    if !config.log.redact {
-        return None;
-    }
+    config.log.redact.then(|| redactor_always(config))
+}
+
+/// The same redactor, whether or not file logging has redaction switched
+/// off: tool output headed for the *model* is scrubbed regardless of
+/// `log.redact` (REQ-TOOL-020).
+#[must_use]
+pub fn redactor_always(config: &Config) -> Redactor {
     let mut redactor = Redactor::default();
     for pattern in &config.security.redact_patterns {
         let _ = redactor.add_pattern(pattern);
@@ -386,7 +391,7 @@ pub fn redactor_for(config: &Config) -> Option<Redactor> {
             }
         }
     }
-    Some(redactor)
+    redactor
 }
 
 fn file_filter(level: LogLevel) -> tracing_subscriber::filter::LevelFilter {

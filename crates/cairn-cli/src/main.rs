@@ -21,6 +21,7 @@ mod headless;
 mod log;
 mod output;
 mod provide;
+mod toolkit;
 
 use clap::error::ErrorKind;
 use clap::Parser;

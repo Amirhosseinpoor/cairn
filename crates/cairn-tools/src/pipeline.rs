@@ -115,6 +115,18 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
+    /// A failed result for a call that never reached the pipeline (arguments
+    /// that did not parse, a call the loop refused to dispatch).
+    #[must_use]
+    pub fn rejected(call_id: &str, name: &str, error: &ToolError) -> Self {
+        let call = ToolCall {
+            call_id: call_id.to_string(),
+            name: name.to_string(),
+            input: Value::Null,
+        };
+        failure(&call, Instant::now(), error, ToolStatus::Error, false)
+    }
+
     /// The text sent to the model.
     #[must_use]
     pub fn text(&self) -> String {

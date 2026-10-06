@@ -48,6 +48,19 @@ pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<
             "pipe the prompt in, or use -p '<text>'".to_string(),
         ));
     }
+    if args.allow_ask
+        && (args.stdin
+            || args
+                .prompt_file
+                .as_deref()
+                .is_some_and(|f| f.as_os_str() == "-")
+            || args.input.as_deref().is_some_and(|f| f.as_os_str() == "-"))
+    {
+        return Err(Fail::usage(
+            "--allow-ask reads approval answers from stdin, which is already taken",
+            "give the prompt with -p or a file, not stdin".to_string(),
+        ));
+    }
     let prompt = read_prompt(args)?;
     let format = match cli.output.as_deref() {
         None | Some("text") => OutputFormat::Text,
@@ -97,6 +110,11 @@ pub fn run(cli: &crate::args::Cli, args: &RunArgs, startup: &Startup) -> Result<
         auto_recover: startup.loaded.config.session.auto_recover,
         quiet: startup.quiet,
         cache_home: startup.loaded.paths.cache_home.clone(),
+        config: startup.loaded.config.clone(),
+        paths: startup.loaded.paths.clone(),
+        run_mode: startup.loaded.config.mode,
+        allow_ask: args.allow_ask,
+        max_iterations: args.max_iterations,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -234,6 +252,17 @@ pub fn resume(cli: &crate::args::Cli, args: &ResumeArgs, startup: &Startup) -> R
             auto_recover: false,
             quiet: startup.quiet,
             cache_home: startup.loaded.paths.cache_home.clone(),
+            config: startup.loaded.config.clone(),
+            paths: startup.loaded.paths.clone(),
+            // REQ-MODE-003: the session's own mode, unless a flag says otherwise.
+            run_mode: cli
+                .mode
+                .as_deref()
+                .or(Some(state.mode.as_str()))
+                .and_then(|m| cairn_core::Mode::parse(m).ok())
+                .unwrap_or(startup.loaded.config.mode),
+            allow_ask: false,
+            max_iterations: None,
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

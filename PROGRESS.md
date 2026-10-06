@@ -21,7 +21,7 @@ decoder), and the five §4.4 adapters with non-network `health()` — see
 | Format | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings (pedantic, `clippy.toml` tuned) |
 | Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | 0 warnings |
-| Tests | `cargo test --workspace` | **649 passed, 0 failed** |
+| Tests | `cargo test --workspace` | **678 passed, 0 failed** |
 | MSRV | `cargo +1.83.0 test --workspace` | 392 passed (D-01 / `rust-version`) |
 | Coverage | `cargo llvm-cov --workspace --summary-only` | line **86.63%** total — `cairn-config` **87.06%**, `cairn-core` **94.03%** (both ≥ 70% ✅); regions 87.87%, functions 85.64% (M0 measurement) |
 | Licences/bans | `cargo deny check` | ok (`deny.toml`, D-13) |
@@ -170,6 +170,7 @@ release signing key exists — M5).
 | **M2-A2 — `cairn-search`** — one `IgnoreEngine` with §5.1's precedence (defaults < global gitignore < `.gitignore` chain < `.ignore` < `.cairnignore` < config include/exclude; deeper files override shallower; `.git` always excluded; an ignored directory's contents stay ignored), used by both single-file checks and the walker so they cannot disagree; §5.1's binary-detection algorithm plus a `NotUtf8` class so a Latin-1 file reports `E-FS-ENCODING` rather than "binary"; a hand-written deterministic walker (sorted, no symlink following, depth/entry caps, hidden names admitted only by explicit include); `glob` (globset, oldest-first) and `grep` (ripgrep engine, context, multiline, binary skipping and counting, size/regex limits) | done | REQ-CTX-001/002/004, §5.1, §6.2.6, §6.2.7 |
 | **M2-A3 — `cairn-tools` framework** — the `Tool` trait and registry (registration enforces name pattern, closed input schema, schema validity; plan mode *omits* write/execute tools), the §9.4 `Boundary` (lexical `..` + symlink-resolving canonicalisation *before* containment; grants read-only unless writable; protected set including secrets, `~/.ssh`, shell profiles, `.git`/`permissions.json` write-only), schema validation split into `E-TOOL-BADSCHEMA` vs `E-TOOL-TOOBIG`, deterministic §5.5 head/tail truncation that keeps error blocks, and the §6.5 pipeline: schema → limits → boundary → protected → permission (approvals: once/session/always/deny/deny-always, timeout `E-PERM-TIMEOUT`) → execute under timeout and cancellation → truncate → redact/sanitise → record, with §6.6's lanes (8 parallel reads, per-path writers, a serial lane that waits for in-flight writes, burst queueing) | done | T-TOOL-001/002/010/012/013/014, T-PERM-006/010/013, REQ-TOOL-001/002/018..023, REQ-SAFE-004/007 |
 | **M2-A4 — `read_file`, `list_dir`, `glob`, `grep`** — numbered ranges with caps (2,000 lines / 200 KiB, 1 MiB needs a range, 8 MiB refused), CRLF/BOM/hash/`file_state` recorded, ignored/binary/encoding/escape/protected failures each with a code and a recovery, secrets redacted and hidden characters stripped before the model sees them; `list_dir` shows ignored entries flagged without entering them | done | T-TOOL-003, T-TOOL-011 (read-side), T-SEC-011, T-PERM-020, §6.2.1/5/6/7 |
+| **M2-A5 — the tool loop in `cairn run`** — `cairn-agent::lifecycle::run_loop` implements §8.2 (model call → tool calls → results → model call), making each iteration durable *before* the next begins so a crash leaves committed tool results to recover from; it enforces the iteration and tool-call guardrails (exit 4, `guardrail` record, `guardrail.trip` before `turn.ended`), ends on three consecutive denials (exit 6), on `max_tokens` (`E-LOOP-MAXTOKENS`, exit 1) and on a content filter (exit 3), answers unparseable arguments with `E-TOOL-BADJSON` without dispatching them, and runs a batch under §6.6's policy. `cairn-agent::prompt` renders §8.9's system prompt (environment, tools on offer, the mode's rules, the untrusted-content clause). The CLI wires the executor from config (`toolkit`: boundary from `security.*`, ignore engine from `discovery.*` and the global gitignore, permission files at project and user level, an unreadable file is exit 2 rather than a silent allow, `--allow-ask` answers approvals from stdin), shows tool progress on stderr, emits tool events in stream-json, and counts usage over every model call | done | T-CLI-011, T-CLI-013, T-FAULT-002 (loop half), §8.2, §8.3 T-3/T-4/T-5/T-13, REQ-LOOP-006, REQ-MODE-009 |
 
 ### Decisions taken while landing the session store
 
@@ -381,7 +382,7 @@ key.** What it deliberately leaves, and who owns it:
 | Item | Needs | Owner |
 |------|-------|-------|
 | `cairn chat` / bare `cairn` | the TUI | M3 |
-| T-CLI-011 (exit 4), T-CLI-012 (exit 5), T-CLI-013 (exit 6), T-CLI-014 (exit 8) | guardrails, verification, permissions, plans | M2–M4 |
+| T-CLI-012 (exit 5), T-CLI-014 (exit 8) | verification, plans | M4 (T-CLI-011 and T-CLI-013 landed with the M2 loop) |
 | T-FAULT-002 (three malformed tool-argument turns) | the multi-iteration tool loop | M2 |
 | OS keychain (§4.10 step 3) | a per-platform backend | M5 |
 | `cairn update` install | the `cairn-release.pub` signing key | M5 |

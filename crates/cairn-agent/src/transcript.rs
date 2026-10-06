@@ -22,6 +22,8 @@ pub mod status {
     pub const OK: &str = "ok";
     pub const ERROR: &str = "error";
     pub const CANCELLED: &str = "cancelled";
+    pub const GUARDRAIL: &str = "guardrail";
+    pub const DENIED: &str = "denied";
     /// `d` in §8.7: the partial turn stays on disk but leaves the context.
     pub const ABANDONED: &str = "abandoned";
     /// `k` in §8.7: the partial turn stays and becomes context as it is.
@@ -84,6 +86,10 @@ impl SessionWriter {
 
     /// # Errors
     /// `E-SESS-FLUSH` when the record cannot be written and synced.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the §11.7 tool_result record"
+    )]
     pub fn tool_result(
         &mut self,
         turn_id: u64,
@@ -91,8 +97,21 @@ impl SessionWriter {
         name: &str,
         ok: bool,
         output: &str,
+        duration_ms: u64,
+        truncated: bool,
     ) -> Result<()> {
-        self.append(|seq| Record::tool_result(turn_id, seq, call_id, name, ok, output, 0, false))
+        self.append(|seq| {
+            Record::tool_result(
+                turn_id,
+                seq,
+                call_id,
+                name,
+                ok,
+                output,
+                duration_ms,
+                truncated,
+            )
+        })
     }
 
     /// # Errors
@@ -106,6 +125,20 @@ impl SessionWriter {
         duration_ms: u64,
     ) -> Result<()> {
         self.append(|seq| Record::turn_ended(turn_id, seq, status, usage, cost_usd, duration_ms))
+    }
+
+    /// A tripped guardrail (§7.5, §11.7's `guardrail` record).
+    ///
+    /// # Errors
+    /// `E-SESS-FLUSH` when the record cannot be written and synced.
+    pub fn guardrail(&mut self, rule: &str, limit: u64, actual: u64) -> Result<()> {
+        self.append(|seq| {
+            Record::new(
+                kind::GUARDRAIL,
+                Some(seq),
+                serde_json::json!({ "rule": rule, "limit": limit, "actual": actual }),
+            )
+        })
     }
 
     /// # Errors
@@ -385,7 +418,7 @@ mod tests {
             .message(&Message::user("second", 2))
             .expect("user committed");
         writer
-            .tool_result(2, "c1", "read_file", true, "contents")
+            .tool_result(2, "c1", "read_file", true, "contents", 3, false)
             .expect("tool result committed");
         (dir, store, writer)
     }
