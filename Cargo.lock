@@ -393,6 +393,7 @@ name = "cairn-sandbox"
 version = "0.1.0"
 dependencies = [
  "cairn-core",
+ "libc",
 ]
 
 [[package]]
@@ -458,6 +459,7 @@ dependencies = [
  "cairn-perm",
  "cairn-sandbox",
  "cairn-search",
+ "chrono",
  "futures",
  "globset",
  "hex",

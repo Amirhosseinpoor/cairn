@@ -22,6 +22,24 @@ pub struct PermissionRequest {
     pub protected_path: bool,
     /// Set by shell analysis (§9.3.1): a denylisted construct, at any depth.
     pub denylisted: bool,
+    /// Set by shell analysis (§9.3.2): constructs that need a person's eye
+    /// even where the rules would allow them.
+    pub gate: ShellGate,
+}
+
+/// How far shell analysis tightens a decision beyond the rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShellGate {
+    /// Rules decide.
+    #[default]
+    None,
+    /// Ask in every mode but `auto-unsafe` (`nohup`, `git push --force`,
+    /// `cat ./run.sh | bash`). A rule a person wrote may still allow it.
+    AskUnlessUnsafe,
+    /// `plan` denies and every other mode asks, `auto-unsafe` included, and
+    /// no rule can pre-approve it (`eval "$X"`, `base64 -d | sh`,
+    /// `git reset --hard`, a command that did not parse).
+    AskAlways,
 }
 
 impl PermissionRequest {
@@ -35,6 +53,7 @@ impl PermissionRequest {
             url: None,
             protected_path: false,
             denylisted: false,
+            gate: ShellGate::None,
         }
     }
 
@@ -206,6 +225,15 @@ pub fn evaluate(rules: &[CompiledRule], req: &PermissionRequest, home: Option<&s
             }
         };
     }
+    let (decided, scope) = decide_by_rules(rules, req, home);
+    gated(req, decided, scope)
+}
+
+fn decide_by_rules(
+    rules: &[CompiledRule],
+    req: &PermissionRequest,
+    home: Option<&str>,
+) -> (Decision, Option<Scope>) {
     let matching: Vec<(usize, &CompiledRule)> = rules
         .iter()
         .enumerate()
@@ -226,7 +254,7 @@ pub fn evaluate(rules: &[CompiledRule], req: &PermissionRequest, home: Option<&s
         })
         .max_by_key(|(index, rule)| precedence(rule, *index));
     let Some((_, rule)) = winner else {
-        return no_match(req);
+        return (no_match(req), None);
     };
     let rule_id = rule.rule.id.clone();
     let reason = rule
@@ -234,9 +262,41 @@ pub fn evaluate(rules: &[CompiledRule], req: &PermissionRequest, home: Option<&s
         .note
         .clone()
         .unwrap_or_else(|| format!("rule {rule_id}"));
-    match rule.rule.effect {
+    let decision = match rule.rule.effect {
         Effect::Allow => Decision::Allow { rule_id },
         Effect::Ask => Decision::Ask { rule_id, reason },
         Effect::Deny => Decision::Deny { rule_id, reason },
+    };
+    (decision, Some(rule.rule.scope))
+}
+
+/// Tighten `decided` by the shell gate.
+fn gated(req: &PermissionRequest, decided: Decision, scope: Option<Scope>) -> Decision {
+    let ask = |reason: &str| Decision::Ask {
+        rule_id: "D8".to_string(),
+        reason: reason.to_string(),
+    };
+    match req.gate {
+        ShellGate::None => decided,
+        ShellGate::AskUnlessUnsafe => {
+            if req.mode == Mode::AutoUnsafe {
+                return decided;
+            }
+            let person_spoke = scope.is_some_and(|s| s != Scope::Default);
+            match decided {
+                // A person's own rule — allow or deny — stands.
+                d if person_spoke => d,
+                Decision::Ask { .. } => decided,
+                _ => ask("this command needs your approval"),
+            }
+        }
+        ShellGate::AskAlways => match decided {
+            Decision::Deny { .. } if scope.is_some_and(|s| s != Scope::Default) => decided,
+            _ if req.mode == Mode::Plan => Decision::Deny {
+                rule_id: "D8".to_string(),
+                reason: "this command is never run from plan mode".to_string(),
+            },
+            _ => ask("this command cannot be pre-approved"),
+        },
     }
 }

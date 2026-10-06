@@ -157,6 +157,7 @@ pub struct Executor {
     syntax: Arc<dyn SyntaxCheck>,
     line_endings: LineEndings,
     observer: Arc<dyn cairn_git::WriteObserver>,
+    jobs: Arc<crate::shell::jobs::JobTable>,
     file_state: Arc<FileState>,
     approval_timeout: Duration,
     reads: Semaphore,
@@ -275,6 +276,7 @@ impl Executor {
                 .unwrap_or_else(|| Arc::new(cairn_git::NoObserver)),
             syntax: parts.syntax.unwrap_or_else(|| Arc::new(NoSyntax)),
             line_endings: parts.line_endings,
+            jobs: Arc::new(crate::shell::jobs::JobTable::new()),
             file_state: Arc::new(FileState::default()),
             approval_timeout: parts.approval_timeout,
             reads: Semaphore::new(MAX_PARALLEL_READS),
@@ -288,6 +290,12 @@ impl Executor {
     #[must_use]
     pub fn registry(&self) -> &Registry {
         &self.registry
+    }
+
+    /// Background jobs started through this executor.
+    #[must_use]
+    pub fn jobs(&self) -> Arc<crate::shell::jobs::JobTable> {
+        Arc::clone(&self.jobs)
     }
 
     /// The hashes the model last saw.
@@ -384,7 +392,17 @@ impl Executor {
         request.command = info.command.clone();
         request.url = info.url.clone();
         request.protected_path = resolved.iter().any(|(_, r)| r.protected);
-        match self.authorise(call, &tool, &request, env, &resolved).await {
+        // §9.3: a shell command is judged leaf by leaf, not as one string.
+        let shell = match self.judge_shell(call, &tool, env) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return self.finish_early(call, started, &error, ToolStatus::Denied, true)
+            }
+        };
+        match self
+            .authorise(call, &tool, &request, shell, env, &resolved)
+            .await
+        {
             Ok(()) => {}
             Err((error, status)) => {
                 return self.finish_early(call, started, &error, status, true);
@@ -421,6 +439,7 @@ impl Executor {
             syntax: Arc::clone(&self.syntax),
             line_endings: self.line_endings,
             observer: Arc::clone(&self.observer),
+            jobs: Arc::clone(&self.jobs),
         };
         let write_target = resolved
             .iter()
@@ -520,19 +539,89 @@ impl Executor {
         result
     }
 
+    /// Step 6, for tools that run shell commands: analyse the command and
+    /// ask the policy about each command in it.
+    fn judge_shell(
+        &self,
+        call: &ToolCall,
+        tool: &Arc<dyn Tool>,
+        env: &CallEnv,
+    ) -> Result<Option<crate::shell::Outcome>, ToolError> {
+        let Some(shell) = tool.shell_request(&call.input) else {
+            return Ok(None);
+        };
+        let cwd = match &shell.cwd {
+            Some(dir) => {
+                self.boundary
+                    .resolve(dir, &env.cwd, Access::Read)
+                    .map_err(|e| {
+                        ToolError::new(codes::PERM_DENIED, e.message)
+                            .recovery("Run the command from a directory inside the workspace.")
+                    })?
+                    .abs
+            }
+            None => env.cwd.clone(),
+        };
+        let home = self
+            .boundary
+            .home()
+            .map(|h| h.to_string_lossy().into_owned());
+        let ctx = crate::shell::Ctx {
+            boundary: &self.boundary,
+            cwd: &cwd,
+            home: home.as_deref(),
+        };
+        let analysis = crate::shell::analyze(&shell.command, &ctx);
+        Ok(Some(crate::shell::evaluate(
+            &analysis,
+            &call.name,
+            env.mode,
+            &*self.policy,
+            &shell.command,
+        )))
+    }
+
     /// Step 6: decide, and if the answer is "ask", ask.
     async fn authorise(
         &self,
         call: &ToolCall,
         tool: &Arc<dyn Tool>,
         request: &PermissionRequest,
+        shell: Option<crate::shell::Outcome>,
         env: &CallEnv,
         resolved: &[(Access, crate::paths::Resolved)],
     ) -> Result<(), (ToolError, ToolStatus)> {
         let denied = |error: ToolError| (error, ToolStatus::Denied);
-        match self.policy.decide(request) {
+        // What an approval is about, and what "always" remembers, is the
+        // command that decided — the one leaf — not the whole line.
+        let remembered = shell.as_ref().map_or(request, |o| &o.request);
+        let decision = shell
+            .as_ref()
+            .map_or_else(|| self.policy.decide(request), |o| o.decision.clone());
+        match decision {
             Decision::Allow { .. } => Ok(()),
             Decision::Deny { rule_id, reason } => {
+                if let Some(outcome) = &shell {
+                    if let Some(code) = outcome.code {
+                        return Err(denied(
+                            ToolError::new(code, outcome.message.clone().unwrap_or(reason))
+                                .recovery(
+                                    "Do not retry this; choose another approach or ask the user.",
+                                ),
+                        ));
+                    }
+                    if let Some(message) = &outcome.message {
+                        if env.mode != Mode::Plan {
+                            return Err(denied(
+                                ToolError::new(
+                                    codes::PERM_DENIED,
+                                    format!("Permission denied by rule {rule_id}: {message}"),
+                                )
+                                .recovery("Do not retry this action; choose another approach or ask the user."),
+                            ));
+                        }
+                    }
+                }
                 let plan_write = env.mode == Mode::Plan
                     && (matches!(tool.side_effect(), SideEffect::Write | SideEffect::Execute)
                         || tool.permission_class() == PermissionClass::Write);
@@ -609,7 +698,9 @@ impl Executor {
                 match answer {
                     Answer::Once => Ok(()),
                     Answer::Session => {
-                        let _ = self.policy.remember(request, Effect::Allow, Scope::Session);
+                        let _ = self
+                            .policy
+                            .remember(remembered, Effect::Allow, Scope::Session);
                         Ok(())
                     }
                     Answer::Always => {
@@ -617,16 +708,20 @@ impl Executor {
                         // failure to run what the user just approved.
                         if self
                             .policy
-                            .remember(request, Effect::Allow, Scope::Project)
+                            .remember(remembered, Effect::Allow, Scope::Project)
                             .is_err()
                         {
-                            let _ = self.policy.remember(request, Effect::Allow, Scope::Session);
+                            let _ = self
+                                .policy
+                                .remember(remembered, Effect::Allow, Scope::Session);
                         }
                         Ok(())
                     }
                     Answer::Deny | Answer::DenyAlways => {
                         if answer == Answer::DenyAlways {
-                            let _ = self.policy.remember(request, Effect::Deny, Scope::Project);
+                            let _ = self
+                                .policy
+                                .remember(remembered, Effect::Deny, Scope::Project);
                         }
                         Err(denied(
                             ToolError::new(codes::PERM_DENIED, "The user declined this action.")

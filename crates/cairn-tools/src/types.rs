@@ -113,6 +113,14 @@ pub struct RequestInfo {
     pub url: Option<String>,
 }
 
+/// A shell command line the pipeline must analyse before the tool runs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellRequest {
+    pub command: String,
+    /// Where it runs, as the model wrote it.
+    pub cwd: Option<String>,
+}
+
 /// A successful result: the tool's `data` object (§6.1's envelope).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolOutput {
@@ -356,6 +364,8 @@ pub struct ToolContext {
     pub line_endings: LineEndings,
     /// Told about every write so a checkpoint can protect the file (§9.8).
     pub observer: Arc<dyn cairn_git::WriteObserver>,
+    /// Background jobs this process started.
+    pub jobs: Arc<crate::shell::jobs::JobTable>,
 }
 
 impl std::fmt::Debug for ToolContext {

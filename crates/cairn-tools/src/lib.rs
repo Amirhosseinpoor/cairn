@@ -15,20 +15,22 @@ pub mod paths;
 pub mod pipeline;
 pub mod registry;
 pub mod schema;
+pub mod shell;
 pub mod syntax;
 pub mod tool;
 pub mod types;
 
-pub use paths::{Boundary, Resolved};
+pub use paths::{Boundary, Probe, Resolved};
 pub use pipeline::{
     Answer, ApprovalRequest, Approver, CallEnv, DenyAll, Executor, ExecutorParts, ToolCall,
     ToolResult,
 };
 pub use registry::{offered_in, Registry, RegistryError, TableRow, ToolDef};
+pub use shell::Outcome as ShellOutcome;
 pub use syntax::ParseCheck;
 pub use tool::Tool;
 pub use types::{
     Access, EventSink, FileState, Idempotency, LineEndings, NoSyntax, NullSink, PathArg,
-    PermissionClass, RequestInfo, SideEffect, SyntaxCheck, SyntaxProblem, SyntaxVerdict,
-    ToolContext, ToolError, ToolOutput,
+    PermissionClass, RequestInfo, ShellRequest, SideEffect, SyntaxCheck, SyntaxProblem,
+    SyntaxVerdict, ToolContext, ToolError, ToolOutput,
 };

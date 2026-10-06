@@ -1643,6 +1643,8 @@ stateDiagram-v2
 - Jobs are terminated on session end only if `jobs.kill_on_exit = true` (default `false`), but always terminated on process exit per §3.3 orphan guard.
 - Exit event: `Event::job.finished` with `exit_code`, `duration_ms`.
 
+**Implementation notes (M2).** `bash` runs with pipes only: a PTY (`tty: true`) answers `E-SHELL-PTY`, and a command that scores as interactive (§6.4.5) runs with stdin closed and a `hint` in its result. The session's `cwd` is not tracked across calls (each call defaults to the workspace). `tool.progress` streaming and the on-disk pid table are not implemented; the orphan guard is `JobTable`'s `Drop`, which signals every running job's process group when the executor goes away. A foreground command that leaves a background process holding its pipes does not hold the call: the pipes get 300 ms to close after the shell exits.
+
 ### 6.5 Tool-call validation pipeline
 
 ```
@@ -2370,6 +2372,8 @@ Pipeline:
 | `nohup`/`disown` | command name | ask (orphan risk) |
 
 **9.3.3 Network command policy:** any leaf in `{curl, wget, http, httpie, nc, ncat, ssh, scp, sftp, rsync, ftp, telnet, dig, nslookup, host, ping, traceroute}` → requires `network` permission: allow if D7-style rule matches **and** target is not IP-literal private range (see §9.5 SSRF). `ssh`/`scp`/`rsync` to an arbitrary host → **ask** in all modes except auto_unsafe.
+
+**Implementation notes (M2).** (1) *Per-leaf judgement.* Every command found by the walk is asked of the permission policy on its own text, and the strictest answer wins, so a rule for `npm test` never carries `npm test && rm -rf x` along and `ls && rm -rf build` is not "read-only". A leaf that redirects output to a file, or is a read-only command used with a writing option (`find -delete`, `git branch -D`, `sed -i`, `awk system()`), is rewritten to start with `[write] ` before matching, so no read-only pattern claims it. (2) *Wrappers are transparent.* `env`, `nohup`, `nice`, `timeout`, `xargs`, `sh -c '…'`, a literal `eval '…'` and the like are not leaves; the command they run is, and their own findings (`nohup` asks) carry over to it. (3) *Shell builtins that only change shell state* (`cd`, `true`, `export`, …) are not judged; a command made only of them is as harmless as `echo`. (4) *Three strengths of "ask".* Besides the denylist (D8), analysis can raise a gate: `AskUnlessUnsafe` (T-CMD-018, -030, -052: ask in every mode but `auto-unsafe`, plan included; a rule a person wrote still stands) and `AskAlways` (T-CMD-032, -040, -041, -104: plan denies, every other mode asks even `auto-unsafe`, and no allow rule can pre-approve it). (5) *Protected paths.* A redirect to a protected path or outside the workspace is refused in every mode with `E-FS-PROTECTED`/`E-FS-ESCAPE` (D12); a command argument that writes to a protected path is denylist #9, which asks in `auto-unsafe` (T-CMD-026); reading a protected path with `cat` and the like is D12. (6) *Corrections.* T-CMD-053 lists `git status` as allow in all four modes; D4 and T-CMD-054 make a read-only command ask in plan and build, and D4 is what is implemented. Denylist #23 (system binaries by path) and the §9.3.3 network policy beyond the `ssh`/`scp`/`rsync` gate are not implemented yet; SSRF checks belong to `web_fetch`.
 
 ### 9.4 Filesystem boundary
 

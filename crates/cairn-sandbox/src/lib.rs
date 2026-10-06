@@ -7,6 +7,8 @@
 //! every tool runs under [`PathChecksOnly`]: the §9.4 boundary is enforced in
 //! the tool pipeline, and nothing at the OS level is claimed.
 
+pub mod process;
+
 /// How strongly a platform confines child processes (§9.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SandboxLevel {

@@ -56,6 +56,17 @@ impl Resolved {
     }
 }
 
+/// Where a path would land, without refusing it (shell analysis wants the
+/// facts, not an error).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Probe {
+    pub abs: PathBuf,
+    /// In the workspace or a granted directory.
+    pub inside: bool,
+    /// §9.4's protected set matched (for this access).
+    pub protected: bool,
+}
+
 /// The set of places tools may go, and the places they may not.
 #[derive(Debug, Clone)]
 pub struct Boundary {
@@ -311,6 +322,28 @@ impl Boundary {
             } else {
                 text
             }
+        })
+    }
+
+    /// The home directory, if there is one.
+    #[must_use]
+    pub fn home(&self) -> Option<&Path> {
+        self.home.as_deref()
+    }
+
+    /// Where `input` lands and whether it is protected; `None` for a spelling
+    /// that is not a path at all.
+    #[must_use]
+    pub fn probe(&self, input: &str, base: &Path, access: Access) -> Option<Probe> {
+        let lexical = self.lexical(input, base).ok()?;
+        let abs = Self::canonical(&lexical);
+        let inside =
+            abs.starts_with(&self.root) || self.grants.iter().any(|g| abs.starts_with(&g.path));
+        let protected = self.is_protected(&abs, access);
+        Some(Probe {
+            abs,
+            inside,
+            protected,
         })
     }
 

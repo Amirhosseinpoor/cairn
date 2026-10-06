@@ -9,6 +9,9 @@ license.workspace = true
 [dependencies]
 cairn-core.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 # REQ-ARCH-004: this is the one crate allowed to contain `unsafe`, so it cannot
 # use `lints.workspace = true` (Cargo forbids overriding a workspace lint). The
 # workspace table is mirrored below with only `unsafe_code` flipped; test

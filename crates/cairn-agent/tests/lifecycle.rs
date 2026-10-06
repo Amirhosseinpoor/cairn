@@ -299,13 +299,17 @@ async fn a_tool_call_runs_and_its_result_reaches_the_next_model_call() {
     assert_eq!(
         names,
         [
+            "bash",
+            "bash_background",
             "edit_file",
             "glob",
             "grep",
+            "job_kill",
+            "job_output",
             "list_dir",
             "multi_edit",
             "read_file",
-            "write_file"
+            "write_file",
         ]
     );
     // The second request carries the assistant's call and the tool's answer.

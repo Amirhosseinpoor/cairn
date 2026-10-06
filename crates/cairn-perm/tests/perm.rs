@@ -5,7 +5,7 @@ use cairn_perm::defaults::{defaults_for, ruleset_version, DEFAULT_RULES_JSON};
 use cairn_perm::rule::{compile, compile_all, normalize_command, CompiledRule, Rule};
 use cairn_perm::{
     evaluate, Decision, Effect, PermissionPolicy, PermissionRequest, PolicyFiles, RulePolicy,
-    Scope, Target, TargetKind,
+    Scope, ShellGate, Target, TargetKind,
 };
 
 #[allow(
@@ -961,5 +961,90 @@ fn project_scope_outranks_user_scope() {
     assert_eq!(
         policy.decide(&bash("make all", Mode::Build)).rule_id(),
         "r9"
+    );
+}
+
+// -------------------------------------------------------------- shell gates
+
+fn gated(rules: &[CompiledRule], command: &str, mode: Mode, gate: ShellGate) -> Effect {
+    let mut req = bash(command, mode);
+    req.gate = gate;
+    decide(rules, &req).effect()
+}
+
+/// `AskUnlessUnsafe` (nohup, force-push, `cat ./x | bash`): asks everywhere
+/// but `auto-unsafe`, plan mode included, and a rule a person wrote stands.
+#[test]
+fn the_ask_unless_unsafe_gate_asks_but_respects_a_persons_rule() {
+    let rules = defaults_for(Mode::Build, false);
+    let mut got = Vec::new();
+    for mode in Mode::ALL {
+        let rules = defaults_for(mode, false);
+        got.push(gated(
+            &rules,
+            "nohup ./serve.sh",
+            mode,
+            ShellGate::AskUnlessUnsafe,
+        ));
+    }
+    assert_eq!(got, [Effect::Ask, Effect::Ask, Effect::Ask, Effect::Allow]);
+
+    let mut with_rule = rules;
+    with_rule.push(rule(
+        "u1",
+        Effect::Allow,
+        "bash",
+        target(TargetKind::CommandPrefix, "nohup ./serve.sh"),
+        Scope::Project,
+    ));
+    assert_eq!(
+        gated(
+            &with_rule,
+            "nohup ./serve.sh",
+            Mode::Auto,
+            ShellGate::AskUnlessUnsafe
+        ),
+        Effect::Allow
+    );
+}
+
+/// `AskAlways` (eval, `base64 | sh`, `git reset --hard`, a parse failure):
+/// plan denies, everything else asks — `auto-unsafe` too — and no allow rule,
+/// however broad, can pre-approve it.
+#[test]
+fn the_ask_always_gate_cannot_be_preapproved() {
+    let mut want = Vec::new();
+    for mode in Mode::ALL {
+        let mut rules = defaults_for(mode, false);
+        rules.push(rule("s1", Effect::Allow, "tool:*", None, Scope::Session));
+        rules.push(rule("s2", Effect::Allow, "bash", None, Scope::Project));
+        want.push(gated(
+            &rules,
+            "git reset --hard",
+            mode,
+            ShellGate::AskAlways,
+        ));
+    }
+    assert_eq!(want, [Effect::Deny, Effect::Ask, Effect::Ask, Effect::Ask]);
+}
+
+/// A gate never loosens: a person's deny still denies.
+#[test]
+fn a_gate_never_turns_a_deny_into_an_ask_for_a_persons_rule() {
+    let mut rules = defaults_for(Mode::Build, false);
+    rules.push(rule(
+        "u1",
+        Effect::Deny,
+        "bash",
+        target(TargetKind::CommandPrefix, "nohup *"),
+        Scope::Project,
+    ));
+    assert_eq!(
+        gated(&rules, "nohup ./x", Mode::Build, ShellGate::AskUnlessUnsafe),
+        Effect::Deny
+    );
+    assert_eq!(
+        gated(&rules, "nohup ./x", Mode::Build, ShellGate::AskAlways),
+        Effect::Deny
     );
 }

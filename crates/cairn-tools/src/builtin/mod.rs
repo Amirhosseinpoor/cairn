@@ -1,19 +1,23 @@
 //! The built-in tools (SPEC §6.2).
 
+pub mod bash;
 pub mod common;
 pub mod edit_file;
 pub mod fsio;
 pub mod glob;
 pub mod grep;
+pub mod jobs;
 pub mod list_dir;
 pub mod read_file;
 pub mod write_file;
 
 use std::sync::Arc;
 
+pub use bash::Bash;
 pub use edit_file::{EditFile, MultiEdit};
 pub use glob::Glob;
 pub use grep::Grep;
+pub use jobs::{BashBackground, JobKill, JobOutput};
 pub use list_dir::ListDir;
 pub use read_file::ReadFile;
 pub use write_file::WriteFile;
@@ -32,5 +36,9 @@ pub fn register_all(registry: &mut Registry) -> Result<(), RegistryError> {
     registry.register(Arc::new(WriteFile))?;
     registry.register(Arc::new(EditFile))?;
     registry.register(Arc::new(MultiEdit))?;
+    registry.register(Arc::new(Bash))?;
+    registry.register(Arc::new(BashBackground))?;
+    registry.register(Arc::new(JobOutput))?;
+    registry.register(Arc::new(JobKill))?;
     Ok(())
 }

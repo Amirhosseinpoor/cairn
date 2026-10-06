@@ -20,6 +20,8 @@
 //! edit?" — and imports nothing of the tool layer; the adapter that plugs it
 //! into `edit_file` lives in `cairn-tools`.
 
+pub mod shell;
+
 use std::time::Duration;
 
 use tree_sitter::{Language, Node, Parser, Tree};

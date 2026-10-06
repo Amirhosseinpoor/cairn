@@ -1393,13 +1393,17 @@ fn run_succeeds_in_all_three_formats() {
         assert_eq!(
             offered,
             [
+                "bash",
+                "bash_background",
                 "edit_file",
                 "glob",
                 "grep",
+                "job_kill",
+                "job_output",
                 "list_dir",
                 "multi_edit",
                 "read_file",
-                "write_file"
+                "write_file",
             ]
         );
     }

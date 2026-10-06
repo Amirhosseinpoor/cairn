@@ -20,7 +20,7 @@ use std::sync::RwLock;
 
 use cairn_core::Mode;
 
-pub use evaluate::{evaluate, Decision, PermissionRequest};
+pub use evaluate::{evaluate, Decision, PermissionRequest, ShellGate};
 pub use rule::{Effect, Rule, Scope, Skipped, Target, TargetKind};
 pub use store::PermError;
 

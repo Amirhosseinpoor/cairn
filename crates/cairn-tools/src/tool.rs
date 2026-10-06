@@ -7,8 +7,8 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 
 use crate::types::{
-    Idempotency, PathArg, PermissionClass, RequestInfo, SideEffect, ToolContext, ToolError,
-    ToolOutput,
+    Idempotency, PathArg, PermissionClass, RequestInfo, ShellRequest, SideEffect, ToolContext,
+    ToolError, ToolOutput,
 };
 
 /// One capability the model can call.
@@ -43,6 +43,12 @@ pub trait Tool: Send + Sync + 'static {
     /// The command and URL the permission engine should see.
     fn request_info(&self, _input: &Value) -> RequestInfo {
         RequestInfo::default()
+    }
+
+    /// A shell command line to analyse (§9.3) before permission is decided;
+    /// its leaves, not the whole string, are what the rules see.
+    fn shell_request(&self, _input: &Value) -> Option<ShellRequest> {
+        None
     }
 
     fn execute(
