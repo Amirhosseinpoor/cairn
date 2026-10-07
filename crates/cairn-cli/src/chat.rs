@@ -358,6 +358,13 @@ pub fn run(cli: &crate::args::Cli, args: &ChatArgs, startup: &Startup) -> Result
         .unwrap_or(startup.loaded.config.mode);
 
     let mut app = App::new(look(startup), mode, &live.model_id);
+    app.workspace = Some({
+        let dir = startup.workspace().to_string_lossy().into_owned();
+        match std::env::var("HOME") {
+            Ok(home) if !home.is_empty() && dir.starts_with(&home) => dir.replacen(&home, "~", 1),
+            _ => dir,
+        }
+    });
     app.history = History::load(startup.loaded.paths.state_home.join("history"));
     app.editor = cairn_tui::editor::Editor::new(match startup.loaded.config.input.mode {
         cairn_config::EditorMode::Vi => cairn_tui::editor::EditMode::Vi,

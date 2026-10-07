@@ -42,7 +42,7 @@ fn boxed(app: &App, buf: &mut Buffer, rect: Rect, title: &str, lines: &[Line<'st
     let (h, v, tl, tr, bl, br) = if ascii {
         ("-", "|", "+", "+", "+", "+")
     } else {
-        ("─", "│", "┌", "┐", "└", "┘")
+        ("─", "│", "╭", "╮", "╰", "╯")
     };
     let edge = style(app, Role::Accent);
     let right = rect.x + rect.width - 1;
@@ -84,16 +84,11 @@ fn boxed(app: &App, buf: &mut Buffer, rect: Rect, title: &str, lines: &[Line<'st
     }
 }
 
-/// A box of `want` rows, centred in the transcript.
-fn centred(area: Rect, width: u16, want: usize) -> Rect {
-    let w = width.min(area.width);
+/// A panel of `want` rows across the whole transcript, resting on the
+/// prompt, so nothing of what is under it shows beside it.
+fn centred(area: Rect, _width: u16, want: usize) -> Rect {
     let h = u16::try_from(want + 2).unwrap_or(u16::MAX).min(area.height);
-    Rect::new(
-        area.x + (area.width - w) / 2,
-        area.y + (area.height - h) / 2,
-        w,
-        h,
-    )
+    Rect::new(area.x, area.y + area.height - h, area.width, h)
 }
 
 fn wrapped(text: &str, width: usize, st: Style) -> Vec<Line<'static>> {
@@ -218,7 +213,7 @@ fn pad(text: &str, width: usize) -> String {
 fn diff(app: &App, buf: &mut Buffer, area: Rect, d: &DiffView) {
     let total = usize::from(area.width);
     // The threshold is about the terminal, not the box inside it.
-    let side = side_by_side(app, total + 4);
+    let side = side_by_side(app, total + 2);
     let Some(file) = d.files.get(d.file) else {
         boxed(
             app,
@@ -510,7 +505,7 @@ fn draw_popup(app: &App, buf: &mut Buffer, regions: &Regions, popup: &Popup) {
         return;
     }
     let width = regions.transcript.width.min(60);
-    let y0 = regions.status.y.saturating_sub(n);
+    let y0 = regions.input.y.saturating_sub(1 + n);
     for (i, item) in popup.items.iter().take(usize::from(n)).enumerate() {
         let label = match popup.kind {
             PopupKind::Slash => {

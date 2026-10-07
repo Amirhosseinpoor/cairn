@@ -214,6 +214,8 @@ pub struct App {
     pub page_lines: usize,
     /// A plan file the controller should load and show.
     pub plan_to_load: Option<String>,
+    /// The directory shown on the welcome screen.
+    pub workspace: Option<String>,
 }
 
 impl App {
@@ -253,6 +255,7 @@ impl App {
             show_todos: false,
             page_lines: 10,
             plan_to_load: None,
+            workspace: None,
         }
     }
 

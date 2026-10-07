@@ -94,38 +94,38 @@ fn the_canonical_layout() {
         "Done. 1 file changed (+1 −1). Verification passed.".into(),
     ));
     a.running = None;
-    let want = "\
-┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ cairn ▸ main · build ▸ claude-sonnet-4-5 ▸ $0.041 ▸ 12.8k tok ▸ git:main +1                      │
-├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ › Fix the failing test in tests/parser_test.py                                                   │
-│                                                                                                  │
-│ ⏺ read_file  src/parser.rs  · ✓ · 1.9 KiB · 14 ms                                            [▸] │
-│ ⏺ edit_file  src/parser.rs:120  · ✓ · 3 ms                                                   [▸] │
-│   ┌ 120 ─────────────────────────────────────────────────────────────────────────────────────┐   │
-│   │ - if i > end  {                                                                          │   │
-│   │ + if i >= end {                                                                          │   │
-│   └──────────────────────────────────────────────────────────────────────────────────────────┘   │
-│ ⏺ bash  cargo test --quiet  · ✓ · 4.1 s                                                      [▸] │
-│                                                                                                  │
-│ ✓ Done. 1 file changed (+1 −1). Verification passed.                                             │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ [Plan] [Build] [Auto] · todos 3/7 · ctx 12,880/200k (6%) · [E] ●                                 │
-├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ ›                                                                                                │
-└──────────────────────────────────────────────────────────────────────────────────────────────────┘";
-    assert_eq!(screen(&a, 100, 30), want);
+    let want = r"
+ › Fix the failing test in tests/parser_test.py
+
+ ⏺ read_file(src/parser.rs)
+   ⎿  ✓ 1.9 KiB · 14 ms                                                                         [▸]
+ ⏺ edit_file(src/parser.rs:120)
+   ⎿  ✓ 3 ms                                                                                    [▸]
+      1 line added, 1 removed
+       120 - if i > end  {
+       120 + if i >= end {
+ ⏺ bash(cargo test --quiet)
+   ⎿  ✓ 4.1 s                                                                                   [▸]
+
+ ✓ Done. 1 file changed (+1 −1). Verification passed.
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ › Ask anything · / for commands · @ for files                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+   ⏵ build mode (shift+tab to cycle)    todos 3/7 · ctx 12,880/200k (6%) · git:main +1 · $0.041 ●";
+    assert_eq!(screen(&a, 100, 30), want.trim_start_matches('\n'));
 }
 
 /// T-TUI-002: idle.
@@ -139,22 +139,22 @@ fn the_idle_screen() {
         indexing: false,
     };
     a.context = Some((9_410, 200_000));
-    let want = "\
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ cairn ▸ new session · build ▸ claude-sonnet-4-5 ▸ $0.000                     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│   Ready. Type a prompt, @ to mention a file, / for commands.                 │
-│   AGENTS.md loaded (2 instructions) · repo map: 1,842 files (warm 40 ms)     │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ [Plan] [Build] [Auto] · no todos · ctx 9,410/200k (5%) · [E] ●               │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ ›                                                                            │
-└──────────────────────────────────────────────────────────────────────────────┘";
-    assert_eq!(screen(&a, 80, 14), want);
+    let want = r"
+ ╭──────────────────────────────────────────────────────────────╮
+ │ ✻ Welcome to Cairn                                           │
+ │                                                              │
+ │   model claude-sonnet-4-5                                    │
+ │   mode  build · shift+tab to change                          │
+ ╰──────────────────────────────────────────────────────────────╯
+
+ Ready. Type a prompt, @ to mention a file, / for commands.
+ AGENTS.md loaded (2 instructions) · repo map: 1,842 files (warm 40 ms)
+
+ ╭────────────────────────────────────────────────────────────────────────────╮
+ │ › Ask anything · / for commands · @ for files                              │
+ ╰────────────────────────────────────────────────────────────────────────────╯
+   ⏵ build mode (shift+tab to cycle)                    ctx 9,410/200k (5%) ●";
+    assert_eq!(screen(&a, 80, 14), want.trim_start_matches('\n'));
 }
 
 /// T-TUI-003: streaming — a thinking line, then text arriving with a cursor.
@@ -163,10 +163,12 @@ fn the_streaming_screen() {
     let mut a = app();
     a.context = Some((13_102, 200_000));
     a.submit("Why does it fail?");
-    // Before any text: the thinking line.
+    // Before any text: the thinking line, with how to stop it.
     let thinking = screen(&a, 80, 14);
-    assert!(thinking.contains("⏺ (thinking)"), "{thinking}");
-    assert!(thinking.contains("· thinking ·"), "{thinking}");
+    assert!(
+        thinking.contains("Thinking… (0s · esc to interrupt)"),
+        "{thinking}"
+    );
     a.apply(&EventData::ModelDelta {
         turn_id: 1,
         text: "The parser fails when the stream ends without a terminator. I'll add a check in `next_token` and cover it with a test.".into(),
@@ -183,22 +185,19 @@ fn the_streaming_screen() {
         a.tick();
     }
     let got = screen(&a, 80, 14);
-    let want = "\
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ cairn ▸ new session · build ▸ claude-sonnet-4-5 ▸ $— ▸ 106 tok               │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ › Why does it fail?                                                          │
-│                                                                              │
-│ The parser fails when the stream ends without a terminator. I'll add a check │
-│ in `next_token` and cover it with a test.▌                                   │
-│                                                                              │
-│                                                                              │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ [Plan] [Build] [Auto] · streaming · ctx 13,102/200k (7%) · ⏱ 00:06 · [E] ●   │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ ›                                                                            │
-└──────────────────────────────────────────────────────────────────────────────┘";
-    assert_eq!(got, want);
+    assert!(got.contains(" › Why does it fail?"), "{got}");
+    assert!(
+        got.contains(
+            " ⏺ The parser fails when the stream ends without a terminator. I'll add a check"
+        ),
+        "{got}"
+    );
+    assert!(
+        got.contains("   in `next_token` and cover it with a test.▌"),
+        "{got}"
+    );
+    assert!(got.contains("Responding… (6s · esc to interrupt)"), "{got}");
+    assert!(got.contains("ctx 13,102/200k (7%)"), "{got}");
 }
 
 /// T-TUI-004: a tool running, with its rolling output.
@@ -228,32 +227,16 @@ fn the_tool_running_screen() {
         a.tick();
     }
     let got = screen(&a, 80, 16);
-    let want = "\
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ cairn ▸ new session · build ▸ claude-sonnet-4-5 ▸ $0.000                     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ › run the tests                                                              │
-│                                                                              │
-│ ⏺ bash  cargo test --quiet                                            ⠹ · 4s │
-│   │  test tests::parses_eof ... ok                                           │
-│   │  test tests::rejects_nul ...                                             │
-│   ▸ cancel: Esc · details: ctrl+o                                            │
-│                                                                              │
-│                                                                              │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ [Plan] [Build] [Auto] · running bash · ⏱ 00:04 · [E] ●                       │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ ›                                                                            │
-└──────────────────────────────────────────────────────────────────────────────┘";
-    for (g, w) in got.lines().zip(want.lines()) {
-        // The spinner frame and the exact column of the timer may differ.
-        if w.contains("⏺ bash") {
-            assert!(g.starts_with("│ ⏺ bash  cargo test --quiet"), "{g}");
-            assert!(g.contains("· 4s"), "{g}");
-        } else {
-            assert_eq!(g, w);
-        }
-    }
+    let lines: Vec<&str> = got.lines().collect();
+    assert_eq!(lines[0], " › run the tests");
+    // The spinner frame changes; the rest does not.
+    assert!(lines[2].ends_with(" bash(cargo test --quiet)"), "{got}");
+    assert_eq!(lines[3], "   ⎿  test tests::parses_eof ... ok");
+    assert_eq!(lines[4], "      test tests::rejects_nul ...");
+    assert_eq!(
+        lines[5],
+        "      Running… (4s · esc to cancel · ctrl+o details)"
+    );
 }
 
 /// T-TUI-005: the error state.
@@ -270,25 +253,25 @@ fn the_error_state() {
         actions: Some("[r]etry now  [m]odel  [v]iew log  [Esc] dismiss".into()),
     }));
     a.running = None;
-    let want = "\
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ cairn ▸ new session · build ▸ claude-sonnet-4-5 ▸ $0.000                     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ › go                                                                         │
-│                                                                              │
-│ ✗ Provider error  E-PROV-RATELIMIT (HTTP 429)                                │
-│   OpenAI rate limit reached; retrying in 12s (retry 1/5).                    │
-│   ┌ detail ──────────────────────────────────────────────────────────────┐   │
-│   │ {\"error\":{\"type\":\"rate_limit_exceeded\"}}                             │   │
-│   └──────────────────────────────────────────────────────────────────────┘   │
-│ [r]etry now  [m]odel  [v]iew log  [Esc] dismiss                              │
-│                                                                              │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ [Plan] [Build] [Auto] · no todos · [E] ●                                     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ ›                                                                            │
-└──────────────────────────────────────────────────────────────────────────────┘";
-    assert_eq!(screen(&a, 80, 17), want);
+    let want = r#"
+ › go
+
+ ✗ Provider error  E-PROV-RATELIMIT (HTTP 429)
+   OpenAI rate limit reached; retrying in 12s (retry 1/5).
+   ╭ detail ────────────────────────────────────────────────────────────────╮
+   │ {"error":{"type":"rate_limit_exceeded"}}                               │
+   ╰────────────────────────────────────────────────────────────────────────╯
+ [r]etry now  [m]odel  [v]iew log  [Esc] dismiss
+
+
+
+
+
+ ╭────────────────────────────────────────────────────────────────────────────╮
+ │ › Ask anything · / for commands · @ for files                              │
+ ╰────────────────────────────────────────────────────────────────────────────╯
+   ⏵ build mode (shift+tab to cycle)                      claude-sonnet-4-5 ●"#;
+    assert_eq!(screen(&a, 80, 17), want.trim_start_matches('\n'));
 }
 
 /// §10.1: below 40×12 only the resize message.
@@ -300,9 +283,9 @@ fn a_terminal_that_is_too_small_gets_only_the_resize_message() {
         got.starts_with("Terminal too small (need\n40x12, have 30x10). Resize to\ncontinue."),
         "{got}"
     );
-    assert!(!got.contains('┌'));
+    assert!(!got.contains('╭'));
     // Exactly the minimum draws the interface.
-    assert!(screen(&a, 40, 12).starts_with('┌'));
+    assert!(screen(&a, 40, 12).contains('╭'));
     assert!(screen(&a, 39, 12).starts_with("Terminal too small"));
     assert!(screen(&a, 40, 11).starts_with("Terminal too small"));
 }

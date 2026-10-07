@@ -38,8 +38,6 @@ struct Frame {
     tr: &'static str,
     bl: &'static str,
     br: &'static str,
-    ml: &'static str,
-    mr: &'static str,
 }
 
 impl Frame {
@@ -52,19 +50,15 @@ impl Frame {
                 tr: "+",
                 bl: "+",
                 br: "+",
-                ml: "+",
-                mr: "+",
             }
         } else {
             Self {
                 h: "─",
                 v: "│",
-                tl: "┌",
-                tr: "┐",
-                bl: "└",
-                br: "┘",
-                ml: "├",
-                mr: "┤",
+                tl: "╭",
+                tr: "╮",
+                bl: "╰",
+                br: "╯",
             }
         }
     }
@@ -163,28 +157,27 @@ pub fn duration(ms: u64) -> String {
 // ----------------------------------------------------------------- layout
 
 /// Where everything goes in `area`, or `None` if it is too small.
+///
+/// The transcript fills the screen from the top; the prompt sits in a box
+/// at the bottom with one status line under it.
 #[must_use]
 pub fn layout(app: &App, area: Rect) -> Option<Regions> {
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         return None;
     }
-    let (rows, _) = input_layout(app, usize::from(area.width).saturating_sub(6));
+    let (rows, _) = input_layout(app, usize::from(area.width).saturating_sub(8));
     let input_rows = u16::try_from(rows.len().clamp(1, MAX_INPUT_ROWS)).unwrap_or(1);
-    // One column of padding inside the frame.
-    let x = area.x + 2;
-    let w = area.width - 4;
-    // top border, header, rule, <transcript>, rule, status, rule, <input>, bottom border
-    let fixed = 1 + 1 + 1 + 1 + 1 + 1 + input_rows + 1;
-    let transcript_h = area.height.saturating_sub(fixed);
-    let header = Rect::new(x, area.y + 1, w, 1);
-    let transcript = Rect::new(x, area.y + 3, w, transcript_h);
-    let status = Rect::new(x, area.y + 3 + transcript_h + 1, w, 1);
-    let input = Rect::new(x, status.y + 2, w, input_rows);
+    let transcript_h = area.height.saturating_sub(input_rows + 3);
     Some(Regions {
-        header,
-        transcript,
-        status,
-        input,
+        header: Rect::new(area.x + 1, area.y, area.width - 2, 0),
+        transcript: Rect::new(area.x + 1, area.y, area.width - 2, transcript_h),
+        input: Rect::new(
+            area.x + 3,
+            area.y + transcript_h + 1,
+            area.width - 6,
+            input_rows,
+        ),
+        status: Rect::new(area.x + 3, area.y + area.height - 1, area.width - 6, 1),
     })
 }
 
@@ -247,120 +240,60 @@ pub(crate) fn put_line(buf: &mut Buffer, x: u16, y: u16, width: u16, line: &Line
     }
 }
 
-fn draw_frame(app: &App, buf: &mut Buffer, area: Rect, regions: &Regions) {
+/// The rounded box around the prompt.
+fn draw_input_box(app: &App, buf: &mut Buffer, regions: &Regions) {
     let f = Frame::new(is_ascii_look(app));
-    let dim = style(app, Role::Dim);
-    let right = area.x + area.width - 1;
-    let bottom = area.y + area.height - 1;
-    let hline = |buf: &mut Buffer, y: u16, l: &str, r: &str| {
-        buf.set_string(area.x, y, l, dim);
-        for x in area.x + 1..right {
-            buf.set_string(x, y, f.h, dim);
-        }
-        buf.set_string(right, y, r, dim);
-    };
-    hline(buf, area.y, f.tl, f.tr);
-    hline(buf, bottom, f.bl, f.br);
-    for y in [
-        regions.header.y + 1,
-        regions.status.y - 1,
-        regions.status.y + 1,
-    ] {
-        hline(buf, y, f.ml, f.mr);
-    }
-    for y in area.y + 1..bottom {
-        let is_rule = [
-            regions.header.y + 1,
-            regions.status.y - 1,
-            regions.status.y + 1,
-        ]
-        .contains(&y);
-        if !is_rule {
-            buf.set_string(area.x, y, f.v, dim);
-            buf.set_string(right, y, f.v, dim);
-        }
-    }
-}
-
-fn header_line(app: &App, width: usize) -> Line<'static> {
-    let sep = if is_ascii_look(app) { ">" } else { "▸" };
-    let dot = app.look.glyphs.bullet;
-    let mode = app.mode.as_str();
-    let mode_style = style(app, app.look.theme.mode_role(&mode.replace('-', "_"))).patch(bold());
-    let session = app.session.as_deref().map_or_else(
-        || "new session".to_string(),
-        |s| s.chars().take(14).collect(),
-    );
-    let mut spans = vec![
-        Span::styled("cairn", bold()),
-        Span::raw(format!(" {sep} {session} {dot} ")),
-        Span::styled(mode.to_string(), mode_style),
-        Span::raw(format!(" {sep} {}", app.model)),
-    ];
-    let cost = match (app.cost_usd, app.tokens_in + app.tokens_out) {
-        (Some(c), _) => format!("${c:.3}"),
-        (None, 0) => "$0.000".to_string(),
-        (None, _) => "$—".to_string(),
-    };
-    spans.push(Span::raw(format!(" {sep} {cost}")));
-    let tokens = app.tokens_in + app.tokens_out;
-    if tokens > 0 {
-        spans.push(Span::raw(format!(" {sep} {} tok", short(tokens))));
-    }
-    if let Some(b) = &app.branch {
-        let mut text = format!(" {sep} git:{}", b.name);
-        if b.added > 0 {
-            let _ = write!(text, " +{}", b.added);
-        }
-        if b.removed > 0 {
-            let _ = write!(text, " −{}", b.removed);
-        }
-        spans.push(Span::raw(text));
-    }
-    Line::from(truncate(spans, width, app.look.glyphs.ellipsis))
-}
-
-fn pills(app: &App) -> Vec<Span<'static>> {
-    let mut out = Vec::new();
-    let modes: Vec<(cairn_core::Mode, &str)> = if app.mode == cairn_core::Mode::AutoUnsafe {
-        vec![(cairn_core::Mode::AutoUnsafe, "UNSAFE")]
+    let edge = if app.running.is_some() {
+        style(app, Role::Dim)
     } else {
-        vec![
-            (cairn_core::Mode::Plan, "Plan"),
-            (cairn_core::Mode::Build, "Build"),
-            (cairn_core::Mode::Auto, "Auto"),
-        ]
+        style(app, Role::Accent)
     };
-    for (mode, label) in modes {
-        let role = app.look.theme.mode_role(&mode.as_str().replace('-', "_"));
-        let current = mode == app.mode;
-        let style = if current {
-            style(app, role).add_modifier(Modifier::BOLD | Modifier::REVERSED)
-        } else {
-            style(app, Role::Dim)
-        };
-        out.push(Span::styled(format!("[{label}]"), style));
-        out.push(Span::raw(" "));
+    let left = regions.transcript.x;
+    let right = left + regions.transcript.width - 1;
+    let top = regions.input.y - 1;
+    let bottom = regions.input.y + regions.input.height;
+    buf.set_string(left, top, f.tl, edge);
+    buf.set_string(right, top, f.tr, edge);
+    buf.set_string(left, bottom, f.bl, edge);
+    buf.set_string(right, bottom, f.br, edge);
+    for x in left + 1..right {
+        buf.set_string(x, top, f.h, edge);
+        buf.set_string(x, bottom, f.h, edge);
     }
-    out.pop();
-    out
+    for y in top + 1..bottom {
+        buf.set_string(left, y, f.v, edge);
+        buf.set_string(right, y, f.v, edge);
+    }
 }
 
+/// `⏵⏵ build mode (shift+tab to cycle)`, in the mode's colour.
+fn mode_hint(app: &App) -> Vec<Span<'static>> {
+    let ascii = is_ascii_look(app);
+    let (mark, text) = match app.mode {
+        cairn_core::Mode::Plan => (if ascii { "" } else { "⏸ " }, "plan mode"),
+        cairn_core::Mode::Build => (if ascii { "" } else { "⏵ " }, "build mode"),
+        cairn_core::Mode::Auto => (if ascii { "" } else { "⏵⏵ " }, "auto mode"),
+        cairn_core::Mode::AutoUnsafe => (if ascii { "" } else { "⏵⏵ " }, "UNSAFE: nothing asks"),
+    };
+    let role = app
+        .look
+        .theme
+        .mode_role(&app.mode.as_str().replace('-', "_"));
+    vec![
+        Span::styled(format!("{mark}{text}"), style(app, role).patch(bold())),
+        Span::styled(" (shift+tab to cycle)".to_string(), style(app, Role::Dim)),
+    ]
+}
+
+/// The line under the prompt: the mode on the left, the facts on the right.
 fn status_line(app: &App, width: usize) -> Line<'static> {
     // (drop order, text): lower numbers go first when the line is too long;
     // 0 is never dropped.
     let mut parts: Vec<(u8, String)> = Vec::new();
-    if let Some(r) = &app.running {
-        parts.push((0, app.running_phase()));
-        if let Some(rate) = r.tokens_per_second.filter(|_| r.streaming) {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            parts.push((2, format!("{} tok/s", short(rate as u64))));
+    if app.todos.is_some() {
+        if let Some((done, total)) = app.todos {
+            parts.push((3, format!("todos {done}/{total}")));
         }
-    }
-    match app.todos {
-        Some((done, total)) => parts.push((5, format!("todos {done}/{total}"))),
-        None if app.running.is_none() => parts.push((5, "no todos".to_string())),
-        None => {}
     }
     if let Some((used, win)) = app.context {
         let pct = if win == 0 {
@@ -373,22 +306,44 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
             format!("ctx {}/{} ({pct}%)", group(u64::from(used)), window(win)),
         ));
     }
-    if let Some(e) = app.elapsed() {
-        parts.push((4, format!("⏱ {e}")));
-    }
     if app.jobs > 0 {
-        parts.push((3, format!("⚙{}", app.jobs)));
+        parts.push((5, format!("⚙{}", app.jobs)));
     }
     if let Some(s) = &app.sandbox {
-        parts.push((1, format!("⛨ {s}")));
+        parts.push((6, format!("⛨ {s}")));
     }
-    parts.push((0, app.editor.mode_label().to_string()));
+    if let Some(b) = &app.branch {
+        let mut text = format!("git:{}", b.name);
+        if b.added > 0 {
+            let _ = write!(text, " +{}", b.added);
+        }
+        if b.removed > 0 {
+            let _ = write!(text, " −{}", b.removed);
+        }
+        parts.push((4, text));
+    }
+    let tokens = app.tokens_in + app.tokens_out;
+    if tokens > 0 {
+        parts.push((2, format!("{} tok", short(tokens))));
+    }
+    let cost = match (app.cost_usd, tokens) {
+        (Some(c), _) => Some(format!("${c:.3}")),
+        (None, 0) => None,
+        (None, _) => Some("$—".to_string()),
+    };
+    if let Some(cost) = cost {
+        parts.push((7, cost));
+    }
+    parts.push((1, app.model.clone()));
+    let label = app.editor.mode_label();
+    if label != "[E]" {
+        parts.push((0, label.to_string()));
+    }
     let link = if app.online {
         app.look.glyphs.online
     } else {
         app.look.glyphs.offline
     };
-    let dot = format!(" {} ", app.look.glyphs.bullet);
     // The context figure warns as the window fills.
     let ctx_role = app.context.and_then(|(used, win)| {
         let pct = u64::from(used) * 100 / u64::from(win.max(1));
@@ -398,23 +353,28 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
             _ => None,
         }
     });
-    let build = |parts: &[(u8, String)]| {
-        let mut spans = pills(app);
-        for (_, text) in parts {
-            spans.push(Span::raw(dot.clone()));
+    let dot = format!(" {} ", app.look.glyphs.bullet);
+    let dim = style(app, Role::Dim);
+    let right = |parts: &[(u8, String)]| {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for (i, (_, text)) in parts.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(dot.clone(), dim));
+            }
             match ctx_role.filter(|_| text.starts_with("ctx ")) {
                 Some(role) => {
                     spans.push(Span::styled(text.clone(), style(app, role).patch(bold())));
                 }
-                None => spans.push(Span::raw(text.clone())),
+                None => spans.push(Span::styled(text.clone(), dim)),
             }
         }
-        spans.push(Span::raw(format!(" {link}")));
+        spans.push(Span::styled(format!(" {link}"), dim));
         spans
     };
+    let left = mode_hint(app);
     let measure = |spans: &[Span<'static>]| spans.iter().map(|s| s.content.width()).sum::<usize>();
     let mut kept = parts;
-    while measure(&build(&kept)) > width {
+    while measure(&left) + measure(&right(&kept)) + 2 > width {
         let Some(victim) = kept
             .iter()
             .filter(|(p, _)| *p > 0)
@@ -425,10 +385,20 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         };
         kept.retain(|(p, _)| *p != victim);
     }
-    Line::from(truncate(build(&kept), width, app.look.glyphs.ellipsis))
+    spread(left, right(&kept), width, app.look.glyphs.ellipsis)
 }
 
 // -------------------------------------------------------------- transcript
+
+/// `  ⎿  ` leads the first line of a tool's result, blanks the rest.
+fn result_lead(app: &App, first: bool) -> Span<'static> {
+    let dim = style(app, Role::Dim);
+    if first {
+        Span::styled(format!("  {}  ", app.look.glyphs.result), dim)
+    } else {
+        Span::styled("     ".to_string(), dim)
+    }
+}
 
 fn tool_lines(app: &App, card: &ToolCard, width: usize) -> Vec<Line<'static>> {
     let g = &app.look.glyphs;
@@ -436,57 +406,65 @@ fn tool_lines(app: &App, card: &ToolCard, width: usize) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let marker = if card.expanded { g.collapse } else { g.expand };
     let toggle = vec![Span::styled(format!("[{marker}]"), dim)];
-    let name = Span::styled(card.name.clone(), bold());
-    let summary = if card.summary.is_empty() {
-        String::new()
+    let call = if card.summary.is_empty() {
+        card.name.clone()
     } else {
-        format!("  {}", card.summary)
+        format!("{}({})", card.name, card.summary)
+    };
+    let name = Span::styled(call, bold());
+    let spinner = if app.look.animation {
+        g.spinner[usize::try_from(app.tick).unwrap_or(0) % g.spinner.len()]
+    } else {
+        g.tool
     };
     match &card.state {
         ToolState::Running => {
-            let frame = if app.look.animation {
-                g.spinner[usize::try_from(app.tick).unwrap_or(0) % g.spinner.len()]
-            } else {
-                "..."
-            };
+            out.push(Line::from(truncate(
+                vec![
+                    Span::styled(format!("{spinner} "), style(app, Role::Accent)),
+                    name,
+                ],
+                width,
+                g.ellipsis,
+            )));
             let seconds = app.tick.saturating_sub(card.started_tick) * 80 / 1000;
-            let left = vec![
-                Span::styled(format!("{} ", g.tool), style(app, Role::Accent)),
-                name,
-                Span::raw(summary),
-            ];
-            let right = vec![Span::raw(format!("{frame} {} {seconds}s", g.bullet))];
-            out.push(spread(left, right, width, g.ellipsis));
-            for l in &card.tail {
+            for (i, l) in card.tail.iter().enumerate() {
                 out.push(Line::from(truncate(
-                    vec![Span::styled(
-                        format!("  {}  {l}", if is_ascii_look(app) { "|" } else { "│" }),
-                        dim,
-                    )],
+                    vec![result_lead(app, i == 0), Span::styled(l.clone(), dim)],
                     width,
                     g.ellipsis,
                 )));
             }
-            out.push(Line::from(Span::styled(
-                format!("  {} cancel: Esc {} details: ctrl+o", g.expand, g.bullet),
-                dim,
-            )));
+            out.push(Line::from(vec![
+                result_lead(app, card.tail.is_empty()),
+                Span::styled(
+                    format!(
+                        "Running{} ({seconds}s {} esc to cancel {} ctrl+o details)",
+                        g.ellipsis, g.bullet, g.bullet
+                    ),
+                    dim,
+                ),
+            ]));
         }
         ToolState::Done { duration_ms } => {
-            let mut left = vec![
-                Span::styled(format!("{} ", g.tool), style(app, Role::Accent)),
-                name,
-                Span::raw(summary),
-            ];
-            let mut facts = vec![g.ok.to_string()];
+            out.push(Line::from(truncate(
+                vec![
+                    Span::styled(format!("{} ", g.tool), style(app, Role::Green)),
+                    name,
+                ],
+                width,
+                g.ellipsis,
+            )));
+            let mut facts = Vec::new();
             if card.bytes > 0 {
                 facts.push(size(card.bytes));
             }
             facts.push(duration(*duration_ms));
-            left.push(Span::styled(
-                format!("  {} {}", g.bullet, facts.join(&format!(" {} ", g.bullet))),
-                dim,
-            ));
+            let left = vec![
+                result_lead(app, true),
+                Span::styled(format!("{} ", g.ok), style(app, Role::Green)),
+                Span::styled(facts.join(&format!(" {} ", g.bullet)), dim),
+            ];
             out.push(spread(left, toggle, width, g.ellipsis));
         }
         ToolState::Failed {
@@ -495,105 +473,131 @@ fn tool_lines(app: &App, card: &ToolCard, width: usize) -> Vec<Line<'static>> {
             recovery,
         } => {
             let red = style(app, Role::Red);
+            out.push(Line::from(truncate(
+                vec![Span::styled(format!("{} ", g.tool), red), name],
+                width,
+                g.ellipsis,
+            )));
             out.push(spread(
                 vec![
-                    Span::styled(format!("{} ", g.fail), red),
-                    Span::styled(card.name.clone(), red.patch(bold())),
-                    Span::styled(format!(" {code}"), red),
-                    Span::styled(format!("  {} {}", g.bullet, duration(*duration_ms)), dim),
+                    result_lead(app, true),
+                    Span::styled(format!("{} {code}", g.fail), red.patch(bold())),
+                    Span::styled(format!(" {} {}", g.bullet, duration(*duration_ms)), dim),
                 ],
                 toggle,
                 width,
                 g.ellipsis,
             ));
             if let Some(r) = recovery {
-                out.push(Line::from(Span::styled(format!("  recovery: {r}"), dim)));
+                out.push(Line::from(vec![
+                    result_lead(app, false),
+                    Span::styled(format!("recovery: {r}"), dim),
+                ]));
             }
         }
         ToolState::Denied { code, reason } => {
             let amber = style(app, Role::Amber);
             out.push(Line::from(truncate(
-                vec![
-                    Span::styled(format!("{} ", g.warn), amber),
-                    Span::styled(card.name.clone(), amber.patch(bold())),
-                    Span::styled(format!(" denied {code}"), amber),
-                ],
+                vec![Span::styled(format!("{} ", g.tool), amber), name],
                 width,
                 g.ellipsis,
             )));
+            out.push(Line::from(vec![
+                result_lead(app, true),
+                Span::styled(format!("{} denied {code}", g.warn), amber),
+            ]));
             if !reason.is_empty() {
-                out.push(Line::from(Span::styled(format!("  {reason}"), dim)));
+                out.push(Line::from(vec![
+                    result_lead(app, false),
+                    Span::styled(reason.clone(), dim),
+                ]));
             }
         }
     }
     if let Some((first, lines)) = &card.diff {
-        out.extend(diff_box(app, *first, lines, width));
+        out.extend(diff_lines(app, *first, lines, width));
     }
     if card.expanded && !matches!(card.state, ToolState::Running) {
         let pretty = serde_json::to_string_pretty(&card.input).unwrap_or_default();
-        out.push(Line::from(Span::styled("  input", dim)));
+        out.push(Line::from(vec![
+            result_lead(app, false),
+            Span::styled("input", dim),
+        ]));
         for l in pretty.lines().take(40) {
-            out.push(Line::from(Span::raw(format!("    {l}"))));
+            out.push(Line::from(vec![
+                result_lead(app, false),
+                Span::raw(format!("  {l}")),
+            ]));
         }
         if let Some(text) = &card.output {
-            out.push(Line::from(Span::styled("  output", dim)));
+            out.push(Line::from(vec![
+                result_lead(app, false),
+                Span::styled("output", dim),
+            ]));
             for l in text.lines().take(40) {
                 out.push(Line::from(truncate(
-                    vec![Span::raw(format!("    {l}"))],
+                    vec![result_lead(app, false), Span::raw(format!("  {l}"))],
                     width,
                     g.ellipsis,
                 )));
             }
         }
         if let Some(rule) = &card.rule {
-            out.push(Line::from(Span::styled(format!("  rule: {rule}"), dim)));
+            out.push(Line::from(vec![
+                result_lead(app, false),
+                Span::styled(format!("rule: {rule}"), dim),
+            ]));
         }
     }
     out
 }
 
-/// The small boxed diff under an edit.
-fn diff_box(app: &App, first: u32, lines: &[String], width: usize) -> Vec<Line<'static>> {
-    let ascii = is_ascii_look(app);
-    let (h, v, tl, tr, bl, br) = if ascii {
-        ("-", "|", "+", "+", "+", "+")
-    } else {
-        ("─", "│", "┌", "┐", "└", "┘")
-    };
+/// The changed lines under an edit, numbered, in red and green.
+fn diff_lines(app: &App, first: u32, lines: &[String], width: usize) -> Vec<Line<'static>> {
+    const SHOWN: usize = 30;
     let dim = style(app, Role::Dim);
-    let inner = width.saturating_sub(6).max(10);
-    let title = format!(" {first} ");
-    let mut out = vec![Line::from(Span::styled(
-        format!(
-            "  {tl}{title}{}{tr}",
-            h.repeat(inner.saturating_sub(title.width()))
-        ),
-        dim,
-    ))];
-    for l in lines {
-        let role = match l.chars().next() {
-            Some('-') => Role::Red,
-            Some('+') => Role::Green,
-            _ => Role::Fg,
-        };
-        let text = truncate(
-            vec![Span::styled(l.clone(), style(app, role))],
-            inner - 1,
-            app.look.glyphs.ellipsis,
-        );
-        let used: usize = text.iter().map(|s| s.content.width()).sum();
-        let mut spans = vec![Span::styled(format!("  {v} "), dim)];
-        spans.extend(text);
-        spans.push(Span::styled(
-            format!("{}{v}", " ".repeat(inner.saturating_sub(used + 1))),
+    let adds = lines.iter().filter(|l| l.starts_with('+')).count();
+    let removes = lines.iter().filter(|l| l.starts_with('-')).count();
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    let mut out = vec![Line::from(vec![
+        result_lead(app, false),
+        Span::styled(
+            format!("{} added, {} removed", plural(adds, "line"), removes),
             dim,
-        ));
-        out.push(Line::from(spans));
+        ),
+    ])];
+    let mut number = first;
+    for l in lines.iter().take(SHOWN) {
+        let (role, shown) = match l.chars().next() {
+            Some('-') => (Some(Role::Red), true),
+            Some('+') => (Some(Role::Green), true),
+            _ => (None, true),
+        };
+        let _ = shown;
+        let text = format!("{number:>5} {l}");
+        if !l.starts_with('-') {
+            number += 1;
+        }
+        let st = role.map_or_else(Style::default, |r| style(app, r));
+        out.push(Line::from(truncate(
+            vec![
+                Span::styled("    ".to_string(), dim),
+                Span::styled(text, st),
+            ],
+            width,
+            app.look.glyphs.ellipsis,
+        )));
     }
-    out.push(Line::from(Span::styled(
-        format!("  {bl}{}{br}", h.repeat(inner)),
-        dim,
-    )));
+    if lines.len() > SHOWN {
+        out.push(Line::from(Span::styled(
+            format!(
+                "    {} {} more lines",
+                app.look.glyphs.ellipsis,
+                lines.len() - SHOWN
+            ),
+            dim,
+        )));
+    }
     out
 }
 
@@ -623,7 +627,7 @@ fn error_lines(app: &App, card: &ErrorCard, width: usize) -> Vec<Line<'static>> 
         let (h, v, tl, tr, bl, br) = if is_ascii_look(app) {
             ("-", "|", "+", "+", "+", "+")
         } else {
-            ("─", "│", "┌", "┐", "└", "┘")
+            ("─", "│", "╭", "╮", "╰", "╯")
         };
         let inner = width.saturating_sub(6).max(12);
         let title = " detail ";
@@ -656,39 +660,49 @@ fn error_lines(app: &App, card: &ErrorCard, width: usize) -> Vec<Line<'static>> 
     out
 }
 
+/// Lines of `body` after a lead on the first line and blanks on the rest.
+fn led(lead: &Span<'static>, body: Vec<Line<'static>>, indent: usize) -> Vec<Line<'static>> {
+    body.into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let mut spans = vec![if i == 0 {
+                lead.clone()
+            } else {
+                Span::raw(" ".repeat(indent))
+            }];
+            spans.extend(line.spans);
+            Line::from(spans)
+        })
+        .collect()
+}
+
 fn item_lines(app: &App, item: &Item, width: usize) -> Vec<Line<'static>> {
     let g = &app.look.glyphs;
     let dim = style(app, Role::Dim);
     match item {
         Item::User(text) => {
-            let mut out = Vec::new();
-            for (i, line) in markdown::wrap(vec![Span::raw(text.clone())], width.saturating_sub(2))
+            // What you said stands out from what came back.
+            let body = markdown::wrap(vec![Span::raw(text.clone())], width.saturating_sub(2))
                 .into_iter()
-                .enumerate()
-            {
-                let lead = if i == 0 {
-                    Span::styled(
-                        format!("{} ", g.prompt),
-                        style(app, Role::Accent).patch(bold()),
+                .map(|l| {
+                    Line::from(
+                        l.spans
+                            .into_iter()
+                            .map(|sp| Span::styled(sp.content, sp.style.patch(bold())))
+                            .collect::<Vec<_>>(),
                     )
-                } else {
-                    Span::raw("  ")
-                };
-                // What you said stands out from what came back.
-                let mut spans = vec![lead];
-                spans.extend(
-                    line.spans
-                        .into_iter()
-                        .map(|sp| Span::styled(sp.content, sp.style.patch(bold()))),
-                );
-                out.push(Line::from(spans));
-            }
-            out
+                })
+                .collect();
+            led(
+                &Span::styled(format!("{} ", g.prompt), dim.patch(bold())),
+                body,
+                2,
+            )
         }
         Item::Assistant { text, streaming } => {
             let mut lines = markdown::render(
                 text,
-                width,
+                width.saturating_sub(2),
                 Style3 {
                     theme: &app.look.theme,
                     support: app.look.support,
@@ -703,7 +717,7 @@ fn item_lines(app: &App, item: &Item, width: usize) -> Vec<Line<'static>> {
                     None => lines.push(Line::from(Span::raw(cursor))),
                 }
             }
-            lines
+            led(&Span::raw(format!("{} ", g.tool)), lines, 2)
         }
         Item::Reasoning {
             text,
@@ -717,7 +731,7 @@ fn item_lines(app: &App, item: &Item, width: usize) -> Vec<Line<'static>> {
             let marker = if *expanded { g.collapse } else { g.expand };
             let head = spread(
                 vec![Span::styled(
-                    format!("{} reasoning {} {tokens} tokens", g.tool, g.bullet),
+                    format!("{} reasoning {} {tokens} tokens", g.star, g.bullet),
                     dim,
                 )],
                 vec![Span::styled(format!("[{marker}]"), dim)],
@@ -739,43 +753,76 @@ fn item_lines(app: &App, item: &Item, width: usize) -> Vec<Line<'static>> {
         }
         Item::Tool(card) => tool_lines(app, card, width),
         Item::Notice(kind, text) => {
-            let (symbol, role) = match kind {
-                NoticeKind::Info => (g.bullet, Role::Dim),
-                NoticeKind::Success => (g.ok, Role::Green),
-                NoticeKind::Warning => (g.warn, Role::Amber),
+            let (lead, role) = match kind {
+                NoticeKind::Info => (format!("  {}  ", g.result), Role::Dim),
+                NoticeKind::Success => (format!("{} ", g.ok), Role::Green),
+                NoticeKind::Warning => (format!("{} ", g.warn), Role::Amber),
             };
-            markdown::wrap(vec![Span::raw(text.clone())], width.saturating_sub(2))
+            let pad = lead.width();
+            let body = markdown::wrap(vec![Span::raw(text.clone())], width.saturating_sub(pad))
                 .into_iter()
-                .enumerate()
-                .map(|(i, l)| {
-                    let lead = if i == 0 {
-                        format!("{symbol} ")
-                    } else {
-                        "  ".to_string()
-                    };
-                    let mut spans = vec![Span::styled(lead, style(app, role))];
-                    spans.extend(
+                .map(|l| {
+                    Line::from(
                         l.spans
                             .into_iter()
-                            .map(|s| Span::styled(s.content, style(app, role).patch(s.style))),
-                    );
-                    Line::from(spans)
+                            .map(|s| Span::styled(s.content, style(app, role).patch(s.style)))
+                            .collect::<Vec<_>>(),
+                    )
                 })
-                .collect()
+                .collect();
+            led(&Span::styled(lead, style(app, role)), body, pad)
         }
         Item::Error(card) => error_lines(app, card, width),
     }
 }
 
-/// The idle screen (§10.9).
+/// The welcome box and the startup facts (§10.9).
 fn idle_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let g = &app.look.glyphs;
     let dim = style(app, Role::Dim);
-    let mut out = vec![
-        Line::from(Span::raw("")),
-        Line::from(Span::raw(
-            "  Ready. Type a prompt, @ to mention a file, / for commands.",
-        )),
-    ];
+    let f = Frame::new(is_ascii_look(app));
+    let edge = style(app, Role::Accent);
+    let inner = width.saturating_sub(2).clamp(20, 62);
+    let row = |spans: Vec<Span<'static>>| {
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        let mut line = vec![Span::styled(f.v.to_string(), edge), Span::raw(" ")];
+        line.extend(spans);
+        line.push(Span::raw(" ".repeat((inner - 1).saturating_sub(used))));
+        line.push(Span::styled(f.v.to_string(), edge));
+        Line::from(truncate(line, inner + 2, g.ellipsis))
+    };
+    let fact = |label: &str, value: String| {
+        row(vec![
+            Span::styled(format!("  {label:<6}"), dim),
+            Span::raw(value),
+        ])
+    };
+    let mut out = vec![Line::from(Span::styled(
+        format!("{}{}{}", f.tl, f.h.repeat(inner), f.tr),
+        edge,
+    ))];
+    out.push(row(vec![
+        Span::styled(format!("{} ", g.star), edge.patch(bold())),
+        Span::styled("Welcome to ".to_string(), bold()),
+        Span::styled("Cairn".to_string(), edge.patch(bold())),
+    ]));
+    out.push(row(Vec::new()));
+    out.push(fact("model", app.model.clone()));
+    out.push(fact(
+        "mode",
+        format!("{} {} shift+tab to change", app.mode.as_str(), g.bullet),
+    ));
+    if let Some(dir) = &app.workspace {
+        out.push(fact("cwd", dir.clone()));
+    }
+    out.push(Line::from(Span::styled(
+        format!("{}{}{}", f.bl, f.h.repeat(inner), f.br),
+        edge,
+    )));
+    out.push(Line::default());
+    out.push(Line::from(Span::raw(
+        "Ready. Type a prompt, @ to mention a file, / for commands.",
+    )));
     let s = &app.startup;
     let agents = if s.instructions == 0 {
         "AGENTS.md: none found · run /init to create one.".to_string()
@@ -799,20 +846,20 @@ fn idle_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         _ => None,
     };
     let second = match map {
-        Some(m) if s.instructions == 0 => format!("{agents}\n  {m}"),
+        Some(m) if s.instructions == 0 => format!("{agents}\n{m}"),
         Some(m) => format!("{agents} · {m}"),
         None => agents,
     };
     for l in second.lines() {
         out.push(Line::from(truncate(
-            vec![Span::styled(format!("  {l}"), dim)],
+            vec![Span::styled(l.to_string(), dim)],
             width,
             "…",
         )));
     }
     if let Some((new, old)) = &app.update_available {
         out.push(Line::from(Span::styled(
-            format!("  ↻ Cairn {new} available (you have {old}). Run: cairn update"),
+            format!("↻ Cairn {new} available (you have {old}). Run: cairn update"),
             dim,
         )));
     }
@@ -831,7 +878,7 @@ pub fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         if lines.is_empty() {
             continue;
         }
-        // Tool cards and notices sit tight against each other.
+        // Tool cards sit tight against each other.
         let tight = matches!(item, Item::Tool(_))
             && matches!(app.transcript.get(i.wrapping_sub(1)), Some(Item::Tool(_)));
         if !out.is_empty() && !tight {
@@ -839,28 +886,34 @@ pub fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         }
         out.extend(lines);
     }
-    // The model has been asked and has not spoken yet.
+    // A turn is running: say what it is doing, and how to stop it.
     if let Some(r) = app.running {
-        let waiting = !r.streaming
-            && !matches!(app.transcript.last(), Some(Item::Tool(c)) if c.state == ToolState::Running);
-        let after_user = matches!(
-            app.transcript.last(),
-            Some(Item::User(_) | Item::Tool(_)) | None
-        );
-        if waiting && after_user {
+        let tool_running =
+            matches!(app.transcript.last(), Some(Item::Tool(c)) if c.state == ToolState::Running);
+        if !tool_running {
             let g = &app.look.glyphs;
             let frame = if app.look.animation {
                 g.spinner[usize::try_from(app.tick).unwrap_or(0) % g.spinner.len()]
             } else {
-                "..."
+                g.star
             };
+            let word = if r.streaming {
+                "Responding"
+            } else {
+                "Thinking"
+            };
+            let seconds = app.tick.saturating_sub(r.started_tick) * 80 / 1000;
             if !out.is_empty() {
                 out.push(Line::default());
             }
-            out.push(Line::from(Span::styled(
-                format!("{} (thinking) {frame}", g.tool),
-                style(app, Role::Dim),
-            )));
+            out.push(Line::from(vec![
+                Span::styled(format!("{frame} "), style(app, Role::Accent)),
+                Span::styled(format!("{word}{}", g.ellipsis), style(app, Role::Accent)),
+                Span::styled(
+                    format!(" ({seconds}s {} esc to interrupt)", g.bullet),
+                    style(app, Role::Dim),
+                ),
+            ]));
         }
     }
     out
@@ -912,14 +965,6 @@ pub fn draw(app: &App, buf: &mut Buffer, area: Rect) -> Option<(u16, u16)> {
         }
         return None;
     };
-    draw_frame(app, buf, area, &regions);
-    put_line(
-        buf,
-        regions.header.x,
-        regions.header.y,
-        regions.header.width,
-        &header_line(app, usize::from(regions.header.width)),
-    );
     put_line(
         buf,
         regions.status.x,
@@ -927,6 +972,7 @@ pub fn draw(app: &App, buf: &mut Buffer, area: Rect) -> Option<(u16, u16)> {
         regions.status.width,
         &status_line(app, usize::from(regions.status.width)),
     );
+    draw_input_box(app, buf, &regions);
 
     // Transcript, scrolled in lines from the bottom.
     let width = usize::from(regions.transcript.width);
@@ -982,6 +1028,16 @@ pub fn draw(app: &App, buf: &mut Buffer, area: Rect) -> Option<(u16, u16)> {
             row,
             usize::from(regions.input.width).saturating_sub(2),
             Style::default(),
+        );
+    }
+    if app.editor.is_empty() && app.running.is_none() {
+        let hint = "Ask anything · / for commands · @ for files";
+        buf.set_stringn(
+            regions.input.x + 2,
+            regions.input.y,
+            hint,
+            usize::from(regions.input.width).saturating_sub(2),
+            style(app, Role::Dim),
         );
     }
     if app.editor.newline_count() > 0 {

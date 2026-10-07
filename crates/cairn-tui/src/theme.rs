@@ -423,6 +423,10 @@ pub struct Glyphs {
     pub expand: &'static str,
     pub collapse: &'static str,
     pub tool: &'static str,
+    /// Leads a tool's result line.
+    pub result: &'static str,
+    /// The resting mark of a working or welcoming line.
+    pub star: &'static str,
     pub prompt: &'static str,
     pub bullet: &'static str,
     pub online: &'static str,
@@ -443,6 +447,8 @@ impl Glyphs {
             expand: "▸",
             collapse: "▾",
             tool: "⏺",
+            result: "⎿",
+            star: "✻",
             prompt: "›",
             bullet: "·",
             online: "●",
@@ -463,6 +469,8 @@ impl Glyphs {
             expand: ">",
             collapse: "v",
             tool: "*",
+            result: "L",
+            star: "*",
             prompt: ">",
             bullet: "-",
             online: "(*)",
