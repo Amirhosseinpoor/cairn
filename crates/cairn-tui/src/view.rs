@@ -389,11 +389,25 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         app.look.glyphs.offline
     };
     let dot = format!(" {} ", app.look.glyphs.bullet);
+    // The context figure warns as the window fills.
+    let ctx_role = app.context.and_then(|(used, win)| {
+        let pct = u64::from(used) * 100 / u64::from(win.max(1));
+        match pct {
+            90.. => Some(Role::Red),
+            75..=89 => Some(Role::Amber),
+            _ => None,
+        }
+    });
     let build = |parts: &[(u8, String)]| {
         let mut spans = pills(app);
         for (_, text) in parts {
             spans.push(Span::raw(dot.clone()));
-            spans.push(Span::raw(text.clone()));
+            match ctx_role.filter(|_| text.starts_with("ctx ")) {
+                Some(role) => {
+                    spans.push(Span::styled(text.clone(), style(app, role).patch(bold())));
+                }
+                None => spans.push(Span::raw(text.clone())),
+            }
         }
         spans.push(Span::raw(format!(" {link}")));
         spans
@@ -660,8 +674,13 @@ fn item_lines(app: &App, item: &Item, width: usize) -> Vec<Line<'static>> {
                 } else {
                     Span::raw("  ")
                 };
+                // What you said stands out from what came back.
                 let mut spans = vec![lead];
-                spans.extend(line.spans);
+                spans.extend(
+                    line.spans
+                        .into_iter()
+                        .map(|sp| Span::styled(sp.content, sp.style.patch(bold()))),
+                );
                 out.push(Line::from(spans));
             }
             out
@@ -977,7 +996,7 @@ pub fn draw(app: &App, buf: &mut Buffer, area: Rect) -> Option<(u16, u16)> {
     }
     let cx = regions.input.x + 2 + u16::try_from(ccol).unwrap_or(0);
     let cy = regions.input.y + u16::try_from(crow - first).unwrap_or(0);
-    crate::overlay_view::draw_overlay(app, buf, area, &regions);
+    crate::overlay_view::draw_overlay(app, buf, &regions);
     // The cursor hides while the model streams (REQ-TUI-002).
     let streaming = app.running.is_some_and(|r| r.streaming);
     (!streaming && matches!(app.overlay, crate::overlay::Overlay::None)).then_some((cx, cy))

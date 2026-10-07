@@ -354,9 +354,11 @@ fn the_diff_viewer_is_inline_below_100_columns_and_side_by_side_from_100() {
     let narrow = screen(&r.app, 99, 30);
     assert!(narrow.contains("src/range.rs"), "{narrow}");
     assert!(narrow.contains("- "), "{narrow}");
-    assert!(!narrow.contains(" │ "), "{narrow}");
+    // Side by side shows the same line once on each side.
+    let twice = |s: &str| s.lines().any(|l| l.matches("fn clamp").count() == 2);
+    assert!(!twice(&narrow), "{narrow}");
     let wide = screen(&r.app, 100, 30);
-    assert!(wide.contains(" │ "), "{wide}");
+    assert!(twice(&wide), "{wide}");
 }
 
 #[test]
@@ -460,4 +462,20 @@ fn shift_tab_cycles_the_mode_and_ctrl_l_clears_the_view() {
     r.app.submit("x");
     assert_eq!(r.key(Key::ctrl('l')), vec![Command::ClearView]);
     assert!(r.app.transcript.is_empty());
+}
+
+#[test]
+#[ignore = "prints overlays for eyeballing"]
+fn dump_overlays() {
+    let mut r = Rig::new();
+    r.app.apply(&approval_event(
+        "bash",
+        &json!({"command": "cargo test --workspace"}),
+    ));
+    println!("{}", screen(&r.app, 100, 22));
+    r.app.overlay = Overlay::Diff(DiffView::new(parse_unified(DIFF)));
+    println!("{}", screen(&r.app, 120, 22));
+    println!("{}", screen(&r.app, 80, 22));
+    r.app.overlay = Overlay::Help;
+    println!("{}", screen(&r.app, 100, 24));
 }

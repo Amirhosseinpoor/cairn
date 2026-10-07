@@ -274,42 +274,51 @@ fn heading_style(level: HeadingLevel, ctx: &Ctx<'_>) -> Style {
 
 fn code_lines(ctx: &mut Ctx<'_>, language: &str, code: &str) {
     let dim = ctx.role(Role::Dim);
-    let line_glyph = ctx.st.glyphs.horizontal;
+    let ascii = ctx.st.glyphs.horizontal == "-";
+    let (h, v, top, bottom) = if ascii {
+        ("-", "| ", "+", "+")
+    } else {
+        ("─", "│ ", "╭", "╰")
+    };
     let indent = ctx.indent();
     let label = if language.is_empty() {
         String::new()
     } else {
         format!(" {language} ")
     };
-    let fill = line_glyph.repeat(
-        ctx.width
-            .saturating_sub(indent.width() + label.width() + 2)
-            .min(40),
-    );
+    let body: Vec<&str> = code.trim_end_matches('\n').split('\n').collect();
+    let longest = body.iter().map(|l| l.width()).max().unwrap_or(0);
+    // The rules are as wide as the code, within the column, never narrower
+    // than the label.
+    let room = ctx.width.saturating_sub(indent.width());
+    let rule = (longest + 2).max(label.width() + 6).min(room).min(100);
+    let fill = rule.saturating_sub(label.width() + 2);
     ctx.out.push(Line::from(vec![Span::styled(
-        format!("{indent}{line_glyph}{label}{fill}"),
+        format!("{indent}{top}{h}{label}{}", h.repeat(fill)),
         dim,
     )]));
-    let highlighted = ctx.st.highlighter.and_then(|h| h.highlight(language, code));
-    let bar = if line_glyph == "-" { "| " } else { "│ " };
-    for (i, line) in code.trim_end_matches('\n').split('\n').enumerate() {
-        let mut spans = vec![Span::styled(format!("{indent}{bar}"), dim)];
-        match highlighted.as_ref().and_then(|h| h.get(i)) {
+    let highlighted = ctx
+        .st
+        .highlighter
+        .and_then(|hl| hl.highlight(language, code));
+    for (i, line) in body.iter().enumerate() {
+        let mut spans = vec![Span::styled(format!("{indent}{v}"), dim)];
+        match highlighted.as_ref().and_then(|hl| hl.get(i)) {
             Some(tokens) => {
                 for (text, class) in tokens {
                     let style = match ctx.st.theme.syntax.get(*class) {
-                        Some(role) if !class.is_empty() => ctx.role(*role),
+                        Some(r) if !class.is_empty() => ctx.role(*r),
                         _ => Style::default(),
                     };
                     spans.push(Span::styled(text.clone(), style));
                 }
             }
-            None => spans.push(Span::raw(line.to_string())),
+            None => spans.push(Span::raw((*line).to_string())),
         }
         ctx.out.push(Line::from(spans));
     }
     ctx.out.push(Line::from(vec![Span::styled(
-        format!("{indent}{}", line_glyph.repeat(4)),
+        format!("{indent}{bottom}{}", h.repeat(rule.saturating_sub(1))),
         dim,
     )]));
 }
@@ -769,10 +778,12 @@ mod tests {
     fn code_blocks_are_fenced_off_with_their_language() {
         let out = text("```rust\nfn main() {}\nlet x = 1;\n```", 40);
         let lines: Vec<&str> = out.lines().collect();
-        assert!(lines[0].starts_with("─ rust "), "{out}");
+        assert!(lines[0].starts_with("╭─ rust ─"), "{out}");
         assert_eq!(lines[1], "│ fn main() {}");
         assert_eq!(lines[2], "│ let x = 1;");
-        assert_eq!(lines[3], "────");
+        assert!(lines[3].starts_with("╰──"), "{out}");
+        // Top and bottom rules are the same width.
+        assert_eq!(lines[0].chars().count(), lines[3].chars().count(), "{out}");
     }
 
     struct Fake;

@@ -306,3 +306,21 @@ fn a_terminal_that_is_too_small_gets_only_the_resize_message() {
     assert!(screen(&a, 39, 12).starts_with("Terminal too small"));
     assert!(screen(&a, 40, 11).starts_with("Terminal too small"));
 }
+
+#[test]
+#[ignore = "prints screens for eyeballing: cargo test -p cairn-tui dump_screens -- --ignored --nocapture"]
+fn dump_screens() {
+    let mut a = app();
+    a.submit("Fix the off-by-one in clamp()");
+    a.apply(&EventData::ModelDelta { turn_id: 1, text: "I'll look at the **clamp** function first.\n\n- check `range.rs`\n- add a test\n\n```rust\nfn clamp(i: usize) -> usize { i.min(end) }\n```".into() });
+    tool(
+        &mut a,
+        "c1",
+        "read_file",
+        json!({"path": "src/range.rs"}),
+        12,
+        2048,
+    );
+    println!("{}", screen(&a, 100, 30));
+    println!("{}", screen(&a, 60, 20));
+}

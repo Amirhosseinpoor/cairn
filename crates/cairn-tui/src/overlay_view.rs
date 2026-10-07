@@ -21,7 +21,8 @@ use crate::view::{bold, is_ascii_look, put_line, style, Regions};
 const HELP: &[(&str, &str)] = &[
     ("Enter", "send"),
     ("Shift+Enter / Alt+Enter", "newline"),
-    ("Tab", "complete / cycle mode"),
+    ("Tab", "complete the popup choice"),
+    ("Shift+Tab", "cycle mode (plan, build, auto)"),
     ("Esc", "cancel the turn (twice: force)"),
     ("Ctrl+C", "cancel, or quit when idle"),
     ("Ctrl+D", "quit when the prompt is empty"),
@@ -32,7 +33,8 @@ const HELP: &[(&str, &str)] = &[
     ("Ctrl+P", "quick open a file"),
     ("Ctrl+V", "paste an image"),
     ("PgUp / PgDn", "scroll the transcript"),
-    ("?", "this help"),
+    ("F1 / Ctrl+G", "this help"),
+    ("Ctrl+Q", "quit (asks first)"),
 ];
 
 fn boxed(app: &App, buf: &mut Buffer, rect: Rect, title: &str, lines: &[Line<'static>]) {
@@ -113,11 +115,11 @@ fn line(spans: Vec<Span<'static>>) -> Line<'static> {
 }
 
 /// Draw whatever overlay or popup applies, on top of the finished screen.
-pub fn draw_overlay(app: &App, buf: &mut Buffer, area: Rect, regions: &Regions) {
+pub fn draw_overlay(app: &App, buf: &mut Buffer, regions: &Regions) {
     let transcript = Rect::new(
-        area.x + 1,
+        regions.transcript.x,
         regions.transcript.y,
-        area.width.saturating_sub(2),
+        regions.transcript.width,
         regions.transcript.height.max(4),
     );
     match &app.overlay {
@@ -145,8 +147,13 @@ fn approval(app: &App, buf: &mut Buffer, area: Rect, a: &Approval) {
             Span::raw(a.files.join(", ")),
         ]));
     }
+    let prefix = if matches!(a.tool.as_str(), "bash" | "bash_background") {
+        "$ "
+    } else {
+        ""
+    };
     for b in &a.body {
-        lines.extend(wrapped(b, inner, Style::default()));
+        lines.extend(wrapped(&format!("{prefix}{b}"), inner, bold()));
     }
     if let Some((_, diff)) = &a.diff {
         for d in diff {
@@ -211,7 +218,7 @@ fn pad(text: &str, width: usize) -> String {
 fn diff(app: &App, buf: &mut Buffer, area: Rect, d: &DiffView) {
     let total = usize::from(area.width);
     // The threshold is about the terminal, not the box inside it.
-    let side = side_by_side(app, total + 2);
+    let side = side_by_side(app, total + 4);
     let Some(file) = d.files.get(d.file) else {
         boxed(
             app,
@@ -267,12 +274,12 @@ fn diff(app: &App, buf: &mut Buffer, area: Rect, d: &DiffView) {
                     let l = &ls[i];
                     lines.push(line(vec![
                         Span::raw(pad(
-                            &format!("{:>4} {}", l.old_no.unwrap_or(0), l.text),
+                            &format!("{:>4}   {}", l.old_no.unwrap_or(0), l.text),
                             half,
                         )),
                         Span::raw(" │ "),
                         Span::raw(pad(
-                            &format!("{:>4} {}", l.new_no.unwrap_or(0), l.text),
+                            &format!("{:>4}   {}", l.new_no.unwrap_or(0), l.text),
                             half,
                         )),
                     ]));
@@ -291,11 +298,11 @@ fn diff(app: &App, buf: &mut Buffer, area: Rect, d: &DiffView) {
                     for k in 0..rem.len().max(add.len()) {
                         let l = rem.get(k).map_or_else(
                             || " ".repeat(half),
-                            |l| pad(&format!("{:>4} {}", l.old_no.unwrap_or(0), l.text), half),
+                            |l| pad(&format!("{:>4} - {}", l.old_no.unwrap_or(0), l.text), half),
                         );
                         let r = add.get(k).map_or_else(
                             || " ".repeat(half),
-                            |l| pad(&format!("{:>4} {}", l.new_no.unwrap_or(0), l.text), half),
+                            |l| pad(&format!("{:>4} + {}", l.new_no.unwrap_or(0), l.text), half),
                         );
                         lines.push(line(vec![
                             Span::styled(l, style(app, Role::Red)),
